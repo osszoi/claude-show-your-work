@@ -5,22 +5,20 @@ import type { Register } from 'claude-code'
 
 import type { Check, KeyChange, Overlay, Shown, Summary } from '../types'
 
-import { state } from './state'
+import { PLUGIN, state } from './state'
 import { clock, paneSize } from './layout'
 import type { PaneProps } from './layout'
 import { debug, diagnosis, flushDebug } from './diagnostics'
-import { flush, track } from './telemetry'
 import { setUp } from './setup'
 import { haltAllSound, soundUsable } from './sound'
 import { isDocument, prepareDocument } from './document'
 import { forwardPictures, stopForwarding } from './tmux'
-import { CLEAN_SH, exists, expand, findPasted, identityOf, isAudio, isPage, keyOf, locate, NO_FFMPEG, noticeOf, prepare, preparePair, renderPage, REASONS, shiftTimes, trimFrames, VIDEO } from './media'
+import { CLEAN_SH, expand, findPasted, identityOf, isAudio, isPage, keyOf, locate, NO_FFMPEG, noticeOf, prepare, preparePair, renderPage, shiftTimes, trimFrames, VIDEO } from './media'
 import type { Notice } from './media'
 import { handleOf, MARK, noteOf, preparedOf, remember, shownById, shownOf, storeOf, storeVersion, textOf, timesThatMean, versionsOf } from './history'
-import { hadVersionBefore06, PLUGIN } from './updater'
 import { atStep, cantDraw, causeOf, draw, mayBeDropped, noteDrawn, NO_PLACEHOLDERS, NoticeBox, player, removePicturesLine, sideOf, UNRECOGNISED, stop, terminalOf, toolLine, versions, Viewer } from './player'
 import type { Ui } from './player'
-import { ensureSettings, goToStop, loadSettings, Opening, openSettings, openUpdate, openWelcome, Settings, startBackground, startTour, Tour, TOUR_TEXT, UPDATE, UpdatePane, WELCOME_TEXT } from './onboarding'
+import { ensureSettings, goToStop, loadSettings, Opening, openSettings, openWelcome, Settings, startTour, Tour, TOUR_TEXT, WELCOME_TEXT } from './onboarding'
 
 const PANE = 'show-your-work'
 // The tools, and their names from before the rename, so old windows still draw.
@@ -102,8 +100,6 @@ export const register: Register = on => {
     state.hasVideoTools = false
     await loadSettings($)
     void (async () => {
-      const manifest = JSON.parse(await $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`)) as { version?: string }
-      state.pluginVersion = manifest.version ?? '0.0.0'
       const program = (await $.env.get('TERM_PROGRAM')) ?? ''
       const term = (await $.env.get('TERM')) ?? ''
       const herdrApp = !!(await $.env.get('HC_TERMINAL_ID')) || (await $.env.get('__CFBundleIdentifier')) === 'dev.herdr.app'
@@ -129,39 +125,17 @@ export const register: Register = on => {
         state.probed = true
         state.drawCause = isDesktop ? 'desktop' : NO_PLACEHOLDERS[state.terminalName] ? 'terminal' : causeOf(state.inTmux, state.terminalName, state.isForced)
       }
-      state.statsContext = {
-        plugin_version: state.pluginVersion,
-        claude_code_version: (await $.session.version().catch(() => ({ base: '' }))).base ?? '',
-        terminal,
-        has_ffmpeg: await exists($, state.ffmpeg),
-        os: state.isMac ? 'macos' : 'linux',
-      }
-      // Every install sees the welcome and tour once, an update included:
-      // installs from before 0.6.2 never had one. 0.6.0 stored 'welcomed' both
-      // when it showed the welcome and when it skipped it for an update; an
-      // older version's folder still beside this one marks the update.
+      // Every install sees the welcome and tour once.
       state.isWelcomed = !!(await $.store.get('toured'))
-      if (!state.isWelcomed && await $.store.get('welcomed')) {
-        const versions = await $.fs.list($.plugin.root.replace(/\/+$/, '').replace(/\/[^/]+$/, '')).catch(() => [])
-        if (!hadVersionBefore06(versions.map(f => f.name))) {
-          state.isWelcomed = true
-          await $.store.set('toured', true)
-        }
-      }
-      // An update keeps what it already ran: its updates and usage counts start
-      // now, and only a fresh install waits for the welcome.
-      const isUpdate = (await Promise.all(['welcomed', 'installId', 'updateCheckedAt'].map(key => $.store.get(key)))).some(value => value !== undefined && value !== null)
-      if (!state.isWelcomed && isUpdate) await startBackground($)
-      if (state.isWelcomed) await startBackground($)
-      else await openWelcome($)
+      if (!state.isWelcomed) await openWelcome($)
     })().catch(() => undefined)
     // Frames and converted pictures a week old go; a window that scrolls back
     // into view cuts its frames again from the source.
     void $.process.run(['sh', '-c', CLEAN_SH, state.TMP]).then(() => trimFrames($))
     await $.command.register({
       name: 'show-your-work',
-      description: 'Settings for show-your-work; /show-your-work tour for the tour, /show-your-work update to check for updates, /show-your-work diagnose for recent problems',
-      argumentHint: '[settings|tour|update|diagnose]',
+      description: 'Settings for show-your-work; /show-your-work tour for the tour, /show-your-work diagnose for recent problems',
+      argumentHint: '[settings|tour|diagnose]',
     })
     await $.command.register({
       name: 'img',
@@ -238,7 +212,6 @@ export const register: Register = on => {
     // The next session starts with sound on, and nothing sounds past this one.
     state.isSoundOn = true
     haltAllSound('session_end')
-    await flush($).catch(() => undefined)
     await stopForwarding($)
 
     return next(e)
@@ -278,11 +251,9 @@ export const register: Register = on => {
       // wipes the module's memory.
       await $.process.run(['sh', '-c', 'printf "%s" "$1" > "$0"', `${await storeOf($)}/${id}.shown`, JSON.stringify(shown)]).catch(() => undefined)
 
-      track('img_command', { kind: shown.frames ? 'video' : 'image' })
       return { text: `Showing ${shown.title}.\n${MARK}#${id}` }
     } catch (err) {
       const n = noticeOf(err, expand(arg, state.cwd, state.home), state.home)
-      track('show_failed', { from: 'img_command', reason: REASONS[n.kind] })
       return { text: n.message }
     }
   })
@@ -298,11 +269,9 @@ export const register: Register = on => {
       shownById.set(id, shown)
       await $.process.run(['sh', '-c', 'printf "%s" "$1" > "$0"', `${await storeOf($)}/${id}.shown`, JSON.stringify(shown)]).catch(() => undefined)
 
-      track('page_command', { kind: 'image' })
       return { text: `Previewing ${shown.title}. Open page opens it in your browser.\n${MARK}#${id}` }
     } catch (err) {
       const n = noticeOf(err, arg, state.home)
-      track('show_failed', { from: 'page_command', reason: REASONS[n.kind] })
       return { text: n.message }
     }
   })
@@ -318,11 +287,9 @@ export const register: Register = on => {
       shownById.set(id, shown)
       await $.process.run(['sh', '-c', 'printf "%s" "$1" > "$0"', `${await storeOf($)}/${id}.shown`, JSON.stringify(shown)]).catch(() => undefined)
 
-      track('audio_command', { kind: shown.frames ? 'audio' : 'image' })
       return { text: `Showing ${shown.title}.${soundUsable() ? ' Press Play to hear it.' : ''}\n${MARK}#${id}` }
     } catch (err) {
       const n = noticeOf(err, arg, state.home)
-      track('show_failed', { from: 'audio_command', reason: REASONS[n.kind] })
       return { text: n.message }
     }
   })
@@ -338,11 +305,9 @@ export const register: Register = on => {
       shownById.set(id, shown)
       await $.process.run(['sh', '-c', 'printf "%s" "$1" > "$0"', `${await storeOf($)}/${id}.shown`, JSON.stringify(shown)]).catch(() => undefined)
 
-      track('doc_command', { kind: 'document' })
       return { text: `Showing ${shown.title} (${shown.pages?.count ?? 1} page${(shown.pages?.count ?? 1) === 1 ? '' : 's'}).\n${MARK}#${id}` }
     } catch (err) {
       const n = noticeOf(err, arg, state.home)
-      track('show_failed', { from: 'doc_command', reason: REASONS[n.kind] })
       return { text: n.message }
     }
   })
@@ -425,23 +390,6 @@ export const register: Register = on => {
       if (!shown.frames && kept.copy !== kept.real)
         remember(kept.copy, { kind: shown.kind, path: shown.path, source: shown.source, width: shown.width, height: shown.height, title: 'Original', generation: shown.generation })
       const what = shown.kind === 'audio' ? `audio, ${clock(shown.frames!.duration)}` : shown.kind === 'document' ? `document, ${shown.pages?.count ?? 1} pages` : shown.frames ? `video, ${clock(shown.frames.duration)}` : `${shown.sourceWidth ?? shown.width}×${shown.sourceHeight ?? shown.height}`
-      const checks = [...(shown.checks ?? []), ...(shown.compare?.checks ?? [])]
-      track(shown.frames ? 'video_shown' : 'image_shown', {
-        format: (input.path.match(/\.([a-z0-9]+)$/i)?.[1] ?? 'none').toLowerCase().slice(0, 5),
-        ...(shown.frames ? { duration: Math.round(shown.frames.duration * 10) / 10, frames: shown.frames.count } : {}),
-        has_compare: !!shown.compare,
-        is_side_by_side: !!shown.pair,
-        is_revision: !!input.previous,
-        versions: shown.history?.length ?? 0,
-        changes: shown.changes?.length ?? 0,
-        has_custom_changes_title: !!input.changes_title,
-        summary_lines: shown.summary?.length ?? 0,
-        summary_ok: shown.summary ? shown.summary.every(l => l.ok) : undefined,
-        checks: checks.length,
-        checks_failed: checks.filter(c => !c.ok).length,
-        has_url: !!input.url,
-        has_pr: !!input.pr,
-      })
 
       const handle = kept.id ? ` #${kept.id}${kept.chain.length ? `, version ${kept.chain.length + 1} after #${kept.chain.at(-1)!.id}` : ''}.` : ''
       const hint = (kept.missing ? ` #${kept.missing} wasn't found, so this has no history.` : '') + handle
@@ -462,7 +410,6 @@ export const register: Register = on => {
       if (copied) void $.process.run(['rm', '-f', '--', copied, copied.replace(/\.[^./]+$/, '.json')]).catch(() => undefined)
       const n = noticeOf(err, expand(input.path ?? '', state.cwd, state.home), state.home)
       notices.set(e.tool_use_id, n)
-      track('show_failed', { from: String((e as { tool?: string }).tool ?? '').endsWith('video') ? 'show_video' : String((e as { tool?: string }).tool ?? '').endsWith('audio') ? 'show_audio' : String((e as { tool?: string }).tool ?? '').endsWith('document') ? 'show_document' : 'show_image', reason: REASONS[n.kind] })
       return { deny: `show-your-work: ${n.message}` }
     }
   }).catch(() => ({ deny: 'show-your-work: it could not be shown.' }))
@@ -545,10 +492,6 @@ export const register: Register = on => {
     // What went wrong lately, for a bug report: problems noticed (always kept)
     // and where the full local log is. Nothing here is sent anywhere.
     if (/^diagnose$/i.test(invoked.args.trim())) return { text: diagnosis(await $.clock.now()) }
-    if (/^update$/i.test(invoked.args.trim())) {
-      void openUpdate($).catch(() => undefined)
-      return { text: 'Checking for show-your-work updates.' }
-    }
     // /show-your-work settings (or setting) opens them, never closes them.
     const isSettings = /^settings?$/i.test(invoked.args.trim())
     // Run again while they're open, the settings close.
@@ -558,12 +501,6 @@ export const register: Register = on => {
     }
     await openSettings($)
     return { text: 'Opened the show-your-work settings.' }
-  })
-
-  on('ui.render', { component: 'Pane', requestId: UPDATE }, async ($, e) => {
-    await setUp($)
-    await read($, welcome)
-    return UpdatePane($.ui.resolve(e) as Ui, $)
   })
 
   on('ui.render', { component: 'Pane', requestId: WELCOME }, async ($, e) => {

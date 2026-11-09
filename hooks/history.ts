@@ -1,4 +1,4 @@
-// Version history: every shown file kept in .show-your-work/, linked to the
+// Version history: every shown file kept in TMP/store, linked to the
 // one before, and the shown item a result's marker points to.
 import type { EngineInterface } from 'claude-code'
 
@@ -44,9 +44,8 @@ export function versionsOf(value: unknown): { path: string; note?: string }[] {
         : [])
 }
 
-// Every shown file is kept as a version, in .show-your-work/ inside the
-// project (it ignores itself in git), so old rows keep their picture and the
-// history survives restarts. Each version gets a short handle; a revision
+// Every shown file is kept as a version, in TMP/store (never inside the
+// project), so old rows keep their picture and the history survives restarts. Each version gets a short handle; a revision
 // names its parent's handle as `previous`, so history is a chain of explicit
 // links, like commits. No file names are matched: forget the link and there's
 // no history, never a wrong one.
@@ -82,17 +81,14 @@ export const HISTORY_TRIM_SH = [
 ].join('\n')
 export async function storeOf($: EngineInterface): Promise<string> {
   if (storeDir) return storeDir
-  for (const dir of [`${state.cwd || state.home}/.show-your-work`, `${state.TMP}/store`]) {
-    // Never through a link (a repo could commit `.show-your-work -> ..`), and
-    // only a folder this user owns.
-    const r = await $.process.run(['sh', '-c', '[ -L "$0" ] && exit 1; mkdir -p "$0" && [ ! -L "$0" ] && [ -O "$0" ] && { [ -f "$0/.gitignore" ] || printf "*\\n" > "$0/.gitignore"; }', dir]).catch(() => null)
-    if (r && r.exitCode === 0) {
-      const dirs = ((await $.store.get(HISTORY_DIRS)) as string[] | undefined) ?? []
-      if (!dirs.includes(dir)) await $.store.set(HISTORY_DIRS, [dir, ...dirs].slice(0, 200))
-      return (storeDir = dir)
-    }
+  const dir = `${state.TMP}/store`
+  // Never through a link, and only a folder this user owns.
+  const r = await $.process.run(['sh', '-c', '[ -L "$0" ] && exit 1; mkdir -p "$0" && [ ! -L "$0" ] && [ -O "$0" ] && { [ -f "$0/.gitignore" ] || printf "*\\n" > "$0/.gitignore"; }', dir]).catch(() => null)
+  if (r && r.exitCode === 0) {
+    const dirs = ((await $.store.get(HISTORY_DIRS)) as string[] | undefined) ?? []
+    if (!dirs.includes(dir)) await $.store.set(HISTORY_DIRS, [dir, ...dirs].slice(0, 200))
   }
-  return (storeDir = `${state.TMP}/store`)
+  return (storeDir = dir)
 }
 async function readVersion($: EngineInterface, dir: string, id: string): Promise<Version | null> {
   if (!/^[0-9a-f]{4,12}$/.test(id)) return null

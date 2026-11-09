@@ -1,7 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
 import { wrapWords, pagesOf, fit, cellOf, frameWidth, paneSize, layoutOf, targetBox, drawBox, pixelsFor, sizeFor, tabLabel } from '../hooks/layout'
-import { isInstalledCopy } from '../hooks/telemetry'
 import { isAtLeast } from '../hooks/setup'
 import { STOPS } from '../hooks/tour'
 import { settings, state } from '../hooks/state'
@@ -363,12 +362,6 @@ test('versions compare by number, not by text', () => {
   expect(isAtLeast('2.1.1000', '2.1.295')).toBe(true)
   expect(isAtLeast('2.2.0', '2.1.295')).toBe(true)
   expect(isAtLeast('2.1.296-dev', '2.1.295')).toBe(true)
-})
-
-test('only an installed copy sends usage data, never one loaded from a folder', () => {
-  expect(isInstalledCopy('/Users/a/.claude/plugins/cache/iamumeransari/show-your-work/0.6.0')).toBe(true)
-  expect(isInstalledCopy('/Users/a/claude-mods/claude-show-your-work')).toBe(false)
-  expect(isInstalledCopy('/Users/a/Client Sites/show-your-work')).toBe(false)
 })
 
 test('a docked pane sizes to its own width, not the whole screen', () => {

@@ -425,11 +425,6 @@ export function noticeOf(err: unknown, path: string, homeDir = ''): Notice {
   }
 }
 
-// The usage-stats reason for a failure, as a kind.
-export const REASONS: Record<NoticeKind, string> = {
-  missing: 'missing_file', no_ffmpeg: 'video_tools', not_image: 'unreadable', broken_video: 'unreadable', no_picture: 'unreadable', other: 'other',
-}
-
 // Cuts a clip into PNG frames the terminal can swap through.
 // A file as it is now: its path, size and modified time. The same unchanged
 // file shown again maps to the same frames folder and skips the decode; a

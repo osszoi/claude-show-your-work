@@ -4,13 +4,10 @@ import type { EngineInterface } from 'claude-code'
 
 import type { Shown } from '../types'
 
-import { SETTINGS, settings, state } from './state'
+import { PLUGIN, SETTINGS, settings, state } from './state'
 import type { Field } from './state'
-import { act, flush, startTelemetry, track } from './telemetry'
 import { prepare } from './media'
 import { preparedOf } from './history'
-import { BRANCHES, checkForUpdate, findUpdate, installUpdate, PLUGIN } from './updater'
-import type { Found } from './updater'
 import { STOPS } from './tour'
 import type { Stop } from './tour'
 import { atStep, play, player, players, redraw, stop, Viewer } from './player'
@@ -22,13 +19,6 @@ export const WELCOME = 'show-your-work-welcome'
 // The settings pane's and the tour's redraws. Declared in each file that
 // reads or updates it: the engine only reads an atom declared in the same file.
 const welcome = atom({ plugin: 'show-your-work', key: 'welcome' } as const, 0)
-
-// A no to usage data given before these settings (0.5.12's question, 0.5.16's command) stays a no.
-// Updates are on for everyone: fixes have to reach every install.
-export const earlierNo = (consent: unknown, statsOff: unknown, updatesOff: unknown) => {
-  const asked = consent && typeof consent === 'object' ? consent as { stats?: unknown; updates?: unknown } : {}
-  return { isStatsOff: statsOff === true || asked.stats === false, isUpdatesOff: updatesOff === true || asked.updates === false }
-}
 
 // Reads the saved settings once per plugin load. A reload starts with the
 // defaults in memory, and without this pictures would be laid out as Standard
@@ -43,7 +33,6 @@ export async function ensureSettings($: EngineInterface) {
 
 export async function loadSettings($: EngineInterface) {
   const saved = ((await $.store.get('settings')) ?? {}) as Partial<Record<Field, unknown>>
-  if (typeof saved.usage_stats !== 'boolean' && earlierNo(await $.store.get('consent'), await $.store.get('statsOff'), null).isStatsOff) settings.usage_stats = false
   for (const { field } of SETTINGS) if (typeof saved[field] === 'boolean') settings[field] = saved[field] as boolean
 }
 
@@ -51,41 +40,10 @@ async function switchSetting($: EngineInterface, field: Field, value: boolean) {
   // The saved choices, not this module's copy: a reload resets the copy.
   await loadSettings($)
   settings[field] = value
-  act(`setting_${field}_${value ? 'first' : 'second'}`)
   await $.store.set('settings', { ...settings })
-  // The profile keeps the install's current choice of update channel.
-  if (field === 'stable_updates') track('settings_changed', { $set: { update_channel: value ? 'stable' : 'latest' } })
-  if (field === 'standard_size') {
-    track('settings_changed', { $set: { picture_size: value ? 'standard' : 'large' } })
-    // Players already on screen redraw at the new size.
-    redraw($)
-  }
-  // Turning usage data off sends one last signal saying so, then nothing more.
-  if (field === 'usage_stats' && !value && state.isOn) {
-    track('usage_data_turned_off', { $set: { usage_data: 'off' } })
-    await flush($).catch(() => undefined)
-  }
-  // Off means off: nothing queued is kept for later.
-  if (field === 'usage_stats' && !value) {
-    state.isOn = false
-    state.queue = []
-  }
-  if (field === 'usage_stats' && value && state.isWelcomed) await startTelemetry($, state.statsContext)
-  // A new channel is followed now.
-  if (field === 'stable_updates' && state.isWelcomed) {
-    await $.store.set('updateCheckedAt', 0)
-    void checkForUpdate($, state.pluginVersion, value ? BRANCHES.stable : BRANCHES.latest).catch(() => undefined)
-  }
+  // Players already on screen redraw at the new size.
+  if (field === 'standard_size') redraw($)
   await update($, welcome, n => n + 1)
-}
-
-// Updates and usage counts wait for the welcome on a first run, so a switch
-// turned off there is off before anything is sent.
-export async function startBackground($: EngineInterface) {
-  if (hasStarted) return
-  hasStarted = true
-  if (settings.usage_stats) await startTelemetry($, state.statsContext)
-  await checkForUpdate($, state.pluginVersion, settings.stable_updates ? BRANCHES.stable : BRANCHES.latest)
 }
 
 // The first run (see 'toured'): the plugin runs /show-your-work once, and its output row
@@ -98,109 +56,17 @@ export async function openWelcome($: EngineInterface) {
   await openTour($)
 }
 
-// /show-your-work update opens this pane. It checks GitHub for the newest
-// version on the person's channel (Stable or Latest) right away, skipping the
-// once-a-day limit, then offers Install. Nothing installs until they press it.
-export const UPDATE = 'show-your-work-update'
-type UpdateCheck =
-  | { phase: 'checking' }
-  | { phase: 'found'; found: Found }
-  | { phase: 'installing'; latest: string }
-  | { phase: 'installed'; latest: string }
-  | { phase: 'failed' }
-let updateCheck: UpdateCheck = { phase: 'checking' }
-export async function openUpdate($: EngineInterface) {
-  updateCheck = { phase: 'checking' }
-  await $.ui.open({ id: UPDATE, title: 'Updates', focus: true, closeOnEscape: true, holdToasts: true, rows: 9, columns: 70 })
-  await update($, welcome, n => n + 1)
-  await loadSettings($)
-  const branch = settings.stable_updates ? BRANCHES.stable : BRANCHES.latest
-  const found = await findUpdate($, state.pluginVersion, branch).catch((): Found => ({ kind: 'offline' }))
-  updateCheck = { phase: 'found', found }
-  await update($, welcome, n => n + 1)
-}
-
-async function installFound($: EngineInterface, found: Extract<Found, { kind: 'update' | 'move' }>) {
-  act('update_install')
-  updateCheck = { phase: 'installing', latest: found.latest }
-  await update($, welcome, n => n + 1)
-  const isDone = await installUpdate($, found, state.pluginVersion).catch(() => false)
-  updateCheck = isDone ? { phase: 'installed', latest: found.latest } : { phase: 'failed' }
-  await update($, welcome, n => n + 1)
-}
-
-export function UpdatePane(ui: Ui, $: EngineInterface) {
-  const { Box, Text, Button } = ui
-  const channel = settings.stable_updates ? 'Stable releases' : 'Latest releases'
-  const close = <Button key="update-close" label="Close" onPress={() => void $.ui.close({ id: UPDATE })} />
-  const c = updateCheck
-  const found = c.phase === 'found' ? c.found : null
-  // Each outcome of the check sets a bold headline, a dim second line, and
-  // the buttons. Install shows only when there is a newer version.
-  let head = 'Checking for updates…'
-  let line = `On ${state.pluginVersion} · ${channel}`
-  let actions: Ui[] = []
-  if (found?.kind === 'update' || found?.kind === 'move') {
-    head = `Version ${found.latest} is available`
-    actions = [<Button key="update-install" variant="primary" label="Install" onPress={() => void installFound($, found)} />, close]
-  } else if (found?.kind === 'current') {
-    head = "You're on the latest version"
-    actions = [close]
-  } else if (found?.kind === 'pending') {
-    head = `Version ${found.latest} is installed`
-    line = 'Restart Claude Code to start using it.'
-    actions = [close]
-  } else if (found?.kind === 'folder') {
-    head = 'This copy runs from a folder, so it doesn\'t update'
-    actions = [close]
-  } else if (found?.kind === 'busy') {
-    head = 'An update is being installed'
-    line = 'Check again in a minute.'
-    actions = [close]
-  } else if (found?.kind === 'pinned') {
-    head = `This install is pinned to ${found.ref}, so it doesn't update`
-    actions = [close]
-  } else if (found?.kind === 'no_cli') {
-    head = "Couldn't find Claude Code's command"
-    line = 'Update by hand with: claude plugin update show-your-work@iamumeransari'
-    actions = [close]
-  } else if (found?.kind === 'offline') {
-    head = "Couldn't check for updates"
-    line = 'Check your connection and run /show-your-work update again.'
-    actions = [close]
-  } else if (c.phase === 'installing') {
-    head = `Installing ${c.latest}…`
-  } else if (c.phase === 'installed') {
-    head = `Version ${c.latest} is installed`
-    line = 'Restart Claude Code to start using it.'
-    actions = [close]
-  } else if (c.phase === 'failed') {
-    head = "Couldn't install the update"
-    line = `Try again, or run: claude plugin update ${PLUGIN}@iamumeransari`
-    actions = [close]
-  }
-  return (
-    <Box flexDirection="column" paddingX={2} paddingBottom={1}>
-      <Text bold>{head}</Text>
-      <Text dimColor>{line}</Text>
-      {actions.length > 0 && <Box flexDirection="row" columnGap={2} marginTop={1}>{actions}</Box>}
-    </Box>
-  )
-}
-
 // /show-your-work: the switches, in a pane.
 export async function openSettings($: EngineInterface) {
   await $.ui.open({ id: WELCOME, title: 'Settings', focus: true, closeOnEscape: true, holdToasts: true, rows: 10, columns: 70 })
   await update($, welcome, n => n + 1)
 }
 
-let hasStarted = false
 async function finishWelcome($: EngineInterface) {
   if (state.isWelcomed) return
   state.isWelcomed = true
   // Where pictures can't show yet, the tour waits for a session where they do.
   if (state.canImage) await $.store.set('toured', true)
-  await startBackground($)
 }
 
 // A five-second recording of a form being tested, played in the real
@@ -240,7 +106,7 @@ export function Settings(ui: Ui, $: EngineInterface) {
     <Box flexDirection="column" paddingX={2} paddingBottom={1}>
       <Box flexDirection="row" columnGap={2} marginBottom={1}>
         <Button key="close" label="✕ Close" onPress={() => void $.ui.close({ id: WELCOME })} />
-        <Button key="tour" label="Take a tour" onPress={() => { act('tour_from_settings'); void $.ui.close({ id: WELCOME }).then(() => openTour($)) }} />
+        <Button key="tour" label="Take a tour" onPress={() => { void $.ui.close({ id: WELCOME }).then(() => openTour($)) }} />
       </Box>
       <Box marginBottom={1}><Text bold>Show Your Work Settings</Text></Box>
       {SettingRows(ui, $)}
@@ -276,13 +142,12 @@ function SettingRows(ui: Ui, $: EngineInterface) {
           })}
         </Box>
       ))}
-      <Box marginTop={1}><Text dimColor>Usage data is anonymous and helps fix bugs and improve the product experience. No sensitive data is ever shared.</Text></Box>
     </Box>
   )
 }
 
 // The welcome row: the opening in the real player, with its side list, then
-// what to ask and one quiet line about updates and usage counts.
+// what to ask, and where the tour is.
 export async function Opening($: EngineInterface, e: Parameters<EngineInterface['ui']['resolve']>[0], site: string, viewport?: { columns: number; rows: number }) {
   const { Box, Text } = $.ui.resolve(e) as Ui
   let view = null
@@ -295,7 +160,7 @@ export async function Opening($: EngineInterface, e: Parameters<EngineInterface[
       {view ?? <Text bold color="claude">✦ show-your-work is installed and ready</Text>}
       <Box flexDirection="column">
         <Text>Claude now shows you pictures and videos right here in the chat. Try asking Claude to create something and show it to you in the chat, as an image or a recording.</Text>
-        <Text dimColor>It keeps itself updated and sends anonymous usage counts. Change this with /show-your-work, and see every feature with /show-your-work tour.</Text>
+        <Text dimColor>See every feature with /show-your-work tour.</Text>
       </Box>
     </Box>
   )
@@ -397,7 +262,6 @@ async function openTour($: EngineInterface) {
 // What /show-your-work tour does before its row draws: the first stop, and
 // the demo's media read in the background.
 export function startTour($: EngineInterface) {
-  act('tour_open')
   state.isTourPending = true
   state.isTourDone = false
   state.tourStop = 0
@@ -428,7 +292,6 @@ export function goToStop($: EngineInterface, to: number) {
 const mediaOf = (s: Stop) => (s.media === 'splash' ? splash : s.media ? tourMedia[s.media] : null) ?? null
 
 async function finishTour($: EngineInterface, isSkip: boolean) {
-  act(isSkip ? `tour_skip_${state.tourStop}` : 'tour_done')
   stop($, state.tourSite)
   state.isTourDone = true
   await update($, welcome, n => n + 1)
@@ -505,11 +368,11 @@ function TourBar(ui: Ui, $: EngineInterface, columns: number) {
         <Box flexGrow={1} flexShrink={1}><Text bold color="inverseText">{(isDone ? `✓  ${s.tag}` : s.tag).toUpperCase()}</Text></Box>
         <Box flexDirection="row" columnGap={3} flexShrink={0}>
           {/* No Back on the last step: it's a wrap-up, and Done is the only choice. */}
-          {at > 0 && !isLast && onBar('prev', '‹ Back', () => { act(`tour_back_${at}`); goToStop($, at - 1) }, { isButton: true })}
+          {at > 0 && !isLast && onBar('prev', '‹ Back', () => { goToStop($, at - 1) }, { isButton: true })}
           {/* Next fills in once the step is done; until then it's a plain button. */}
           {isLast
             ? onBar('done', 'Done ›', () => void finishTour($, false), { isMain: true, isButton: true })
-            : onBar('next', 'Next ›', () => { act(`tour_next_${at}`); goToStop($, at + 1) }, { isMain: !s.goal || isDone, isButton: true })}
+            : onBar('next', 'Next ›', () => { goToStop($, at + 1) }, { isMain: !s.goal || isDone, isButton: true })}
           {!isLast && onBar('skip', 'Skip tour', () => void finishTour($, true))}
         </Box>
       </Box>

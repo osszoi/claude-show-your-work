@@ -165,13 +165,6 @@ test('while a step\'s demo is loading, the tour shows no bar, so Next can\'t be 
   expect(tree.includes('1 of 5')).toBe(false)
 })
 
-test('/show-your-work update opens a pane that checks first', async ($, on) => {
-  on('store.get', () => ({ value: undefined }))
-  const target = { plugin: 'show-your-work', surface: 'terminal', component: 'Pane', requestId: 'show-your-work-update', props: { bodyColumns: 66, bodyRows: 7 }, viewport: { columns: 120, rows: 50 } } as any
-  const tree = JSON.stringify(await (await $.ui.mount(target)).drawn())
-  expect(tree.includes('Checking for updates')).toBe(true)
-})
-
 // Every node of a drawn tree whose type is `type`.
 const nodesOf = (node: any, type: string, out: any[] = []): any[] => {
   if (!node || typeof node !== 'object') return out

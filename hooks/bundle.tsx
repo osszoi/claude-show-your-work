@@ -202,107 +202,6 @@ export function pagesOf<T>(items: { item: T; rows: number }[], rows: number): T[
   return pages
 }
 
-// ── telemetry.ts ──────────────────────────────────────────────────────────
-// Anonymous usage stats and the button presses they count. The local debug
-// log is diagnostics.ts, kept apart so nothing in it is ever sent.
-
-
-// A button press, by name only. False, so it chains: act('save') || keep().
-export const act = (action: string): false => {
-  track('action', { action })
-  return false
-}
-
-// Anonymous usage stats, sent to PostHog: what kind of thing happened and how
-// often, under a random id made once per install. Never a file name, path,
-// URL, title, prompt or anything typed. Off with SHOW_YOUR_WORK_TELEMETRY=0 or
-// DO_NOT_TRACK=1, and nothing is sent while POSTHOG_PROJECT is empty.
-// PostHog's public project id for this plugin: it can only add events, never
-// read them, so it ships. The address is written out at the call, so the
-// directory review can read where the events go.
-const POSTHOG_PROJECT = 'phc_mLGFguVcH3Tei4txwqXFPU4xBgFDKThEZncahTv3LS3W'
-// Events wait here and go out together, at most once a minute and at exit.
-const FLUSH_MS = 60_000
-const MAX_QUEUED = 500
-
-export type Props = Record<string, string | number | boolean | null | undefined | Record<string, string | number | boolean | undefined>>
-export type Event = { event: string; properties: Props; timestamp: string }
-let installId = ''
-let base: Props = {}
-let isFlushing = false
-
-// A made-up name for an install, the same every time for one id, so profiles
-// read as "Swift Otter" rather than a UUID. Nothing in it comes from the person.
-const ADJECTIVES = ['Swift', 'Quiet', 'Brave', 'Clever', 'Sunny', 'Lucky', 'Bold', 'Calm', 'Eager', 'Gentle', 'Happy', 'Jolly', 'Keen', 'Lively', 'Mellow', 'Nimble', 'Plucky', 'Rapid', 'Snappy', 'Tidy', 'Witty', 'Zesty', 'Cosmic', 'Fuzzy']
-const ANIMALS = ['Otter', 'Falcon', 'Panda', 'Fox', 'Koala', 'Lynx', 'Heron', 'Badger', 'Gecko', 'Owl', 'Puffin', 'Raccoon', 'Seal', 'Tiger', 'Wombat', 'Yak', 'Bison', 'Crane', 'Dolphin', 'Ferret', 'Hedgehog', 'Lemur', 'Moose', 'Quokka']
-export function nicknameOf(id: string): string {
-  let hash = 0
-  for (const ch of id) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0
-  const n = Math.floor(hash / ADJECTIVES.length) % 1000
-
-  return `${ADJECTIVES[hash % ADJECTIVES.length]} ${ANIMALS[Math.floor(hash / 1000) % ANIMALS.length]} ${n}`
-}
-
-// An installed copy runs from Claude Code's plugin cache. One loaded from a
-// folder (--plugin-dir) is someone working on the plugin: it sends nothing.
-export const isInstalledCopy = (root: string) => /\/plugins\/cache\//.test(root)
-
-// SHOW_YOUR_WORK_TELEMETRY=0, DO_NOT_TRACK=1 or CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: nothing is sent.
-export const isStatsBlocked = (optOut?: string, dnt?: string, quiet?: string) =>
-  /^(0|false|off|no)$/i.test(optOut ?? '') || /^(1|true)$/i.test(dnt ?? '') || !!quiet
-
-export async function startTelemetry($: EngineInterface, context: Props) {
-  if (!POSTHOG_PROJECT || !isInstalledCopy($.plugin.root)) return
-  const optOut = await $.env.get('SHOW_YOUR_WORK_TELEMETRY')
-  const dnt = await $.env.get('DO_NOT_TRACK')
-  const quiet = await $.env.get('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC')
-  if (isStatsBlocked(optOut, dnt, quiet)) return
-  // Turned back on in the same session: the timer is already running.
-  if (installId) return void (state.isOn = true)
-  installId = String((await $.store.get('installId')) ?? '')
-  const isNew = !installId
-  if (isNew) {
-    installId = crypto.randomUUID()
-    await $.store.set('installId', installId)
-  }
-  state.isOn = true
-  // Each install is one anonymous person, keyed by its random id: the profile
-  // holds the setup it runs on, never anything about who uses it.
-  // No location, ever: no IP is sent, and PostHog is told not to look one up.
-  base = { ...context, $ip: null, $geoip_disable: true }
-  const profile = { $set: { ...context, name: nicknameOf(installId), update_channel: settings.stable_updates ? 'stable' : 'latest', usage_data: 'on' }, $set_once: { first_plugin_version: String(context.plugin_version ?? "") } }
-  if (isNew) track('installed', profile)
-  track('session_started', profile)
-  $.clock.every(FLUSH_MS, () => void flush($))
-}
-
-// Counts and kinds only: callers pass no names, paths or text.
-export function track(event: string, properties: Props = {}) {
-  if (!state.isOn) return
-  if (state.queue.length >= MAX_QUEUED) state.queue.shift()
-  state.queue.push({ event, properties: { ...base, ...properties }, timestamp: new Date().toISOString() })
-}
-
-export async function flush($: EngineInterface) {
-  if (!state.isOn || isFlushing || !state.queue.length) return
-  isFlushing = true
-  const batch = state.queue
-  state.queue = []
-  try {
-    const r = await $.http.fetch('https://us.i.posthog.com/batch/', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ api_key: POSTHOG_PROJECT, batch: batch.map(e => ({ ...e, distinct_id: installId })) }),
-    })
-    // A refused batch is dropped, not retried: stats are never worth a backlog.
-    if (!r.ok && r.status >= 500) state.queue = [...batch, ...state.queue].slice(-MAX_QUEUED)
-  } catch {
-    state.queue = [...batch, ...state.queue].slice(-MAX_QUEUED)
-  } finally {
-    isFlushing = false
-  }
-}
-
 // ── media.ts ──────────────────────────────────────────────────────────────
 // Getting pictures and videos ready to draw: conversion, frames cut a chunk
 // at a time, the side-by-side clip of two runs, and the frame cache.
@@ -724,11 +623,6 @@ export function noticeOf(err: unknown, path: string, homeDir = ''): Notice {
     message: `${shown} couldn't be shown: ${detail}`,
     prompt: `${shown} couldn't be shown (${detail}). Look into it and show it to me again.`,
   }
-}
-
-// The usage-stats reason for a failure, as a kind.
-export const REASONS: Record<NoticeKind, string> = {
-  missing: 'missing_file', no_ffmpeg: 'video_tools', not_image: 'unreadable', broken_video: 'unreadable', no_picture: 'unreadable', other: 'other',
 }
 
 // Cuts a clip into PNG frames the terminal can swap through.
@@ -1933,7 +1827,7 @@ async function rasterPage($: EngineInterface, pdf: string, dir: string, page: nu
 }
 
 // ── history.ts ────────────────────────────────────────────────────────────
-// Version history: every shown file kept in .show-your-work/, linked to the
+// Version history: every shown file kept in TMP/store, linked to the
 // one before, and the shown item a result's marker points to.
 
 
@@ -1974,9 +1868,8 @@ export function versionsOf(value: unknown): { path: string; note?: string }[] {
         : [])
 }
 
-// Every shown file is kept as a version, in .show-your-work/ inside the
-// project (it ignores itself in git), so old rows keep their picture and the
-// history survives restarts. Each version gets a short handle; a revision
+// Every shown file is kept as a version, in TMP/store (never inside the
+// project), so old rows keep their picture and the history survives restarts. Each version gets a short handle; a revision
 // names its parent's handle as `previous`, so history is a chain of explicit
 // links, like commits. No file names are matched: forget the link and there's
 // no history, never a wrong one.
@@ -2012,17 +1905,14 @@ export const HISTORY_TRIM_SH = [
 ].join('\n')
 export async function storeOf($: EngineInterface): Promise<string> {
   if (storeDir) return storeDir
-  for (const dir of [`${state.cwd || state.home}/.show-your-work`, `${state.TMP}/store`]) {
-    // Never through a link (a repo could commit `.show-your-work -> ..`), and
-    // only a folder this user owns.
-    const r = await $.process.run(['sh', '-c', '[ -L "$0" ] && exit 1; mkdir -p "$0" && [ ! -L "$0" ] && [ -O "$0" ] && { [ -f "$0/.gitignore" ] || printf "*\\n" > "$0/.gitignore"; }', dir]).catch(() => null)
-    if (r && r.exitCode === 0) {
-      const dirs = ((await $.store.get(HISTORY_DIRS)) as string[] | undefined) ?? []
-      if (!dirs.includes(dir)) await $.store.set(HISTORY_DIRS, [dir, ...dirs].slice(0, 200))
-      return (storeDir = dir)
-    }
+  const dir = `${state.TMP}/store`
+  // Never through a link, and only a folder this user owns.
+  const r = await $.process.run(['sh', '-c', '[ -L "$0" ] && exit 1; mkdir -p "$0" && [ ! -L "$0" ] && [ -O "$0" ] && { [ -f "$0/.gitignore" ] || printf "*\\n" > "$0/.gitignore"; }', dir]).catch(() => null)
+  if (r && r.exitCode === 0) {
+    const dirs = ((await $.store.get(HISTORY_DIRS)) as string[] | undefined) ?? []
+    if (!dirs.includes(dir)) await $.store.set(HISTORY_DIRS, [dir, ...dirs].slice(0, 200))
   }
-  return (storeDir = `${state.TMP}/store`)
+  return (storeDir = dir)
 }
 async function readVersion($: EngineInterface, dir: string, id: string): Promise<Version | null> {
   if (!/^[0-9a-f]{4,12}$/.test(id)) return null
@@ -2147,7 +2037,7 @@ export function remember(path: string, made: Shown) {
 const welcome = atom({ plugin: 'show-your-work', key: 'welcome' } as const, 0)
 
 // Each stop points at one real control (spot) with one short line (tag), and
-// is done when the person uses it (goal: the act() name its button fires).
+// is done when the person uses it (goal: the action its button hands tourHeard).
 type Spot = 'play' | 'changes' | 'tabs' | 'history'
 export type Stop = { tag: string; spot?: Spot; goal?: string; media?: 'splash' | 'recording' | 'compare' | 'history' }
 export const STOPS: Stop[] = [
@@ -2164,9 +2054,6 @@ export function tourHeard($: EngineInterface, action: string) {
   const s = STOPS[state.tourStop]
   if (!state.tourSite || state.isTourDone || state.isStopDone || !s?.goal || s.goal !== action) return
   state.isStopDone = true
-  // Sent once per step, numbered from 0 like tour_next_N and tour_skip_N, so a
-  // funnel can tell people who did the step from people who only pressed Next.
-  act(`tour_step_done_${state.tourStop}`)
   void update($, welcome, n => n + 1)
 }
 
@@ -2884,7 +2771,6 @@ function probe($: EngineInterface, site: string, key: string, pic: Pic) {
     if (r.deny && /alt/i.test(r.deny)) {
       state.canImage = false
       state.drawCause = causeOf(state.inTmux, state.terminalName, state.isForced)
-      track('cannot_draw', { cause: state.drawCause })
       $.ui.toast("Pictures can't show here: see the notice in the chat.")
       redraw($)
     }
@@ -3331,9 +3217,9 @@ function PageButtons(ui: Ui, $: EngineInterface, site: string, media: Shown) {
     redraw($, site)
   }
   return [
-    pages.count > 1 && <Button key="prev" plain dimColor={at === 0} label="‹ Prev" onPress={() => { act('page_prev'); go(at - 1) }} />,
+    pages.count > 1 && <Button key="prev" plain dimColor={at === 0} label="‹ Prev" onPress={() => { go(at - 1) }} />,
     <Text key="page-count" dimColor>{`Page ${at + 1} of ${pages.count}`}</Text>,
-    pages.count > 1 && <Button key="next" plain dimColor={at >= pages.count - 1} label="Next ›" onPress={() => { act('page_next'); go(at + 1) }} />,
+    pages.count > 1 && <Button key="next" plain dimColor={at >= pages.count - 1} label="Next ›" onPress={() => { go(at + 1) }} />,
   ]
 }
 
@@ -3354,7 +3240,7 @@ function Scrub(ui: Ui, $: EngineInterface, site: string, media: Shown, width: nu
 
   return (
     <Box flexDirection="row" flexWrap="nowrap" width={width}>
-      <Button key="play" variant="primary" label={word} onPress={() => { act(word.includes('Pause') ? 'pause' : 'play'); if (!word.includes('Pause')) tourHeard($, 'play'); toggle($, site, media, shown) }} />
+      <Button key="play" variant="primary" label={word} onPress={() => { if (!word.includes('Pause')) tourHeard($, 'play'); toggle($, site, media, shown) }} />
       <Text dimColor> {elapsed} </Text>
       {chunks.map((c, i) => (
         <Button
@@ -3362,7 +3248,7 @@ function Scrub(ui: Ui, $: EngineInterface, site: string, media: Shown, width: nu
           plain
           dimColor={c.isAhead}
           label={c.label}
-          onPress={() => { act('scrub'); seek($, site, media, (Math.round((c.start / Math.max(1, segments - 1)) * (frames.count - 1)) + 0.5) / frames.fps, shown) }}
+          onPress={() => { seek($, site, media, (Math.round((c.start / Math.max(1, segments - 1)) * (frames.count - 1)) + 0.5) / frames.fps, shown) }}
         />
       ))}
       <Text dimColor> {total}</Text>
@@ -3486,12 +3372,12 @@ function Tabs(ui: Ui, $: EngineInterface, site: string, shown: Shown) {
 
   return (
     <Box flexDirection="row" gap={1}>
-      <Button key="side-before" variant={isCompare ? 'primary' : 'secondary'} label={tabLabel(shown.compare.label ?? 'Original')} onPress={() => { act('original'); tourHeard($, 'original'); restore(true) }} />
-      <Button key="side-after" variant={isUpdated ? 'primary' : 'secondary'} label={tabLabel(shown.label ?? 'Updated')} onPress={() => { act('updated'); restore(false) }} />
-      {canBoth && <Button key="side-both" variant={isBoth ? 'primary' : 'secondary'} label="⧉ Compare" onPress={() => { act('compare'); tourHeard($, 'compare'); restore(false); split($, site, shown, true) }} />}
+      <Button key="side-before" variant={isCompare ? 'primary' : 'secondary'} label={tabLabel(shown.compare.label ?? 'Original')} onPress={() => { tourHeard($, 'original'); restore(true) }} />
+      <Button key="side-after" variant={isUpdated ? 'primary' : 'secondary'} label={tabLabel(shown.label ?? 'Updated')} onPress={() => { restore(false) }} />
+      {canBoth && <Button key="side-both" variant={isBoth ? 'primary' : 'secondary'} label="⧉ Compare" onPress={() => { tourHeard($, 'compare'); restore(false); split($, site, shown, true) }} />}
       {hasSteps && (
         <Button key="history" variant={isHistory ? 'primary' : 'secondary'} label={`History · ${shown.history!.length + 1}`}
-          onPress={() => { if (isHistory) return restore(false); act('history'); one.isHistory = true; one.changesPage = 0; redraw($, site) }} />
+          onPress={() => { if (isHistory) return restore(false); one.isHistory = true; one.changesPage = 0; redraw($, site) }} />
       )}
     </Box>
   )
@@ -3508,7 +3394,7 @@ function Changes(ui: Ui, $: EngineInterface, site: string, shown: Shown, fixed: 
       key={`${word}-${c.name}`}
       plain
       label={`${c.at !== undefined ? `${clock(c.at)} ` : ''}${word} · ${c.name}`}
-      onPress={() => { if (c.at === undefined) return; act('check_jump'); seek($, site, media, c.at, shown) }}
+      onPress={() => { if (c.at === undefined) return; seek($, site, media, c.at, shown) }}
     />
   )
 
@@ -3615,7 +3501,7 @@ function Report(ui: Ui, $: EngineInterface, site: string, shown: Shown, prLink: 
       {(pages[page] ?? []).map(({ c, n, lines }, k) => {
         const isLive = n === live
         // A change pauses on its moment, to be looked at; Play goes on from there.
-        const jump = () => { if (c.at === undefined) return; act('change_jump'); tourHeard($, 'change_jump'); stop($, site); seek($, site, media, onOriginal ? toOriginal(shown, c.at) : c.at, shown) }
+        const jump = () => { if (c.at === undefined) return; tourHeard($, 'change_jump'); stop($, site); seek($, site, media, onOriginal ? toOriginal(shown, c.at) : c.at, shown) }
         return (
           <Box key={`change-${n}`} flexDirection="row" gap={1} marginTop={k ? 1 : 0}>
             <Text color={isLive ? 'suggestion' : undefined} dimColor={!isLive}>{`${n + 1}.`.padStart(3)}</Text>
@@ -3664,7 +3550,7 @@ function Report(ui: Ui, $: EngineInterface, site: string, shown: Shown, prLink: 
             <Text color={isOn ? 'suggestion' : undefined} dimColor={!isOn}>{`${i + 1}.`.padStart(3)}</Text>
             <Box flexDirection="column" width={VERSION}>
               {lines.map((line, j) => (
-                <Button key={`version-${i}-${j}`} plain label={line} hover={{ inverse: true }} onPress={() => { act('version_pick'); tourHeard($, 'version_pick'); pickVersion($, site, shown, i) }} />
+                <Button key={`version-${i}-${j}`} plain label={line} hover={{ inverse: true }} onPress={() => { tourHeard($, 'version_pick'); pickVersion($, site, shown, i) }} />
               ))}
             </Box>
             {(isOn || isLatest) && (
@@ -3739,9 +3625,9 @@ function Actions(ui: Ui, $: EngineInterface, media: Shown, source: string, isNar
   return (
     <Box flexDirection="row" gap={2}>
       {!source.startsWith(`${state.home}/Downloads/`) ? (
-        <Button key="keep" plain dimColor label="Save to Downloads" onPress={() => { act('save'); void keep() }} />
+        <Button key="keep" plain dimColor label="Save to Downloads" onPress={() => { void keep() }} />
       ) : (
-        <Button key="reveal" plain dimColor label={state.isMac ? 'Show in Finder' : 'Show in folder'} onPress={() => act('reveal') || void $.process.run(state.isMac ? ['open', '-R', source] : openArgv(source.slice(0, source.lastIndexOf('/')) || '/')).then(r => done(r, state.isMac ? 'Shown in Finder' : 'Opened the folder', 'folders', source))} />
+        <Button key="reveal" plain dimColor label={state.isMac ? 'Show in Finder' : 'Show in folder'} onPress={() => void $.process.run(state.isMac ? ['open', '-R', source] : openArgv(source.slice(0, source.lastIndexOf('/')) || '/')).then(r => done(r, state.isMac ? 'Shown in Finder' : 'Opened the folder', 'folders', source))} />
       )}
       {!isNarrow && (
         <Button
@@ -3750,7 +3636,7 @@ function Actions(ui: Ui, $: EngineInterface, media: Shown, source: string, isNar
           dimColor
           label="Copy path"
           onPress={(press: { surface: 'terminal' }) =>
-            act('copy_path') || void $.ui.copy({ text: source, surface: press.surface }).then(r => $.ui.toast(r.isCopied ? 'Path copied' : 'Could not copy the path'))
+            void $.ui.copy({ text: source, surface: press.surface }).then(r => $.ui.toast(r.isCopied ? 'Path copied' : 'Could not copy the path'))
           }
         />
       )}
@@ -3965,9 +3851,9 @@ function Warning(ui: Ui, $: EngineInterface, site: string, shown: Shown, width: 
   const n = cantDraw(state.drawCause, shown.title, shown.frames ? 'video' : 'picture', state.sessionId)
   const file = shown.origin ?? shown.source ?? shown.path
   const onPress = state.drawCause === 'desktop'
-    ? () => act(n.action) || void $.process.run(openArgv(file)).then(r => { if (r.exitCode !== 0) $.ui.toast(openFailure(r, shown.frames ? 'videos' : 'pictures', file)) })
+    ? () => void $.process.run(openArgv(file)).then(r => { if (r.exitCode !== 0) $.ui.toast(openFailure(r, shown.frames ? 'videos' : 'pictures', file)) })
     : state.drawCause === 'unrecognised'
-      ? (press: { surface: 'terminal' }) => act(n.action) || void (async () => {
+      ? (press: { surface: 'terminal' }) => void (async () => {
         const profile = await turnOnPictures($)
         const copied = await $.ui.copy({ text: n.command, surface: press.surface }).then(r => r.isCopied, () => false)
         const where = profile ? `Added to ${profile.replace(state.home, '~')}. ` : ''
@@ -4012,7 +3898,7 @@ export function NoticeBox(ui: Ui, $: EngineInterface, width: number, n: { title:
           variant="primary"
           label={n.label}
           onPress={(press: { surface: 'terminal' }) =>
-            n.onPress ? n.onPress(press) : act(n.action) || void $.ui.copy({ text: n.copy, surface: press.surface }).then(r => $.ui.toast(r.isCopied ? (n.command ? 'Copied. Paste it in your terminal.' : 'Copied. Paste it to Claude.') : 'Could not copy'))
+            n.onPress ? n.onPress(press) : void $.ui.copy({ text: n.copy, surface: press.surface }).then(r => $.ui.toast(r.isCopied ? (n.command ? 'Copied. Paste it in your terminal.' : 'Copied. Paste it to Claude.') : 'Could not copy'))
           }
         />
       </Box>
@@ -4219,9 +4105,9 @@ export async function Viewer(
           {/* Audio with no way to be heard (no ffplay, or the session's speakers
               are another room's) plays silently; that must be said, not silent. */}
           {frames && media.kind === 'audio' && !soundUsable() && <Text dimColor>♪ no sound in this session</Text>}
-          {frames && <Button key="back" plain dimColor label={`« ${SKIP_SECONDS}s`} onPress={() => act('skip_back') || seek($, site, media, one.frame / frames.fps - SKIP_SECONDS, shown, true)} />}
-          {frames && <Button key="forward" plain dimColor label={`${SKIP_SECONDS}s »`} onPress={() => act('skip_forward') || seek($, site, media, one.frame / frames.fps + SKIP_SECONDS, shown, true)} />}
-          {hasSound && <Button key="sound" plain dimColor={!state.isSoundOn} label={state.isSoundOn ? '♪ Mute' : '♪ Unmute'} onPress={() => { act(state.isSoundOn ? 'mute' : 'unmute'); toggleSound($, site, media) }} />}
+          {frames && <Button key="back" plain dimColor label={`« ${SKIP_SECONDS}s`} onPress={() => seek($, site, media, one.frame / frames.fps - SKIP_SECONDS, shown, true)} />}
+          {frames && <Button key="forward" plain dimColor label={`${SKIP_SECONDS}s »`} onPress={() => seek($, site, media, one.frame / frames.fps + SKIP_SECONDS, shown, true)} />}
+          {hasSound && <Button key="sound" plain dimColor={!state.isSoundOn} label={state.isSoundOn ? '♪ Mute' : '♪ Unmute'} onPress={() => { toggleSound($, site, media) }} />}
         </Box>
         <Box flexDirection="row" columnGap={2}>
           {opener}
@@ -4349,6 +4235,8 @@ export function toolLine(tool: string, input: unknown, isRunning: boolean): stri
 // What more than one module reads or changes: the session's facts, the
 // player's and tour's progress, and the settings.
 
+export const PLUGIN = 'show-your-work'
+
 // An imported `let` is read-only to the module that imports it, so anything
 // set in one module and read in another is a field of this object.
 export const state = {
@@ -4412,18 +4300,13 @@ export const state = {
   // The hint Claude was last given with a prompt (hintNow): sent again only
   // when it changes, or after a compaction.
   sentHint: '',
-  // SHOW_YOUR_WORK_DEBUG=1 (see debug in telemetry.ts).
+  // SHOW_YOUR_WORK_DEBUG=1 (see debug in diagnostics.ts).
   isDebug: false,
   terminalName: '',
   // CLAUDE_CODE_FORCE_TERMINAL_IMAGES was set when Claude Code started.
   isForced: false,
   // Inside tmux, the terminal around it (`ghostty`, `kitty`, `rex`, or '').
   outerTerminal: '',
-  // Usage stats: whether they're on, and the events waiting to go out.
-  isOn: false,
-  queue: [] as Event[],
-  pluginVersion: '0.0.0',
-  statsContext: {} as Props,
   isWelcomed: false,
   // The tour: its live row, and where it is.
   tourSite: '',
@@ -4434,22 +4317,19 @@ export const state = {
 }
 
 // The switches, kept in the plugin's store (a /config row would reload the
-// plugin on every change). The environment variables still turn updates and
-// usage counts off whatever these say.
+// plugin on every change).
 export const SETTINGS = [
-  { field: 'stable_updates', title: 'Updates', options: ['Stable releases', 'Latest'], text: 'Automatically install plugin updates from GitHub' },
-  { field: 'usage_stats', title: 'Usage data', options: ['Share anonymously', "Don't share"], text: 'Helps fix bugs and improve the product experience. No sensitive data is ever shared' },
   { field: 'standard_size', title: 'Picture size', options: ['Standard', 'Large'], text: 'Large shows pictures and videos one and a half times bigger' },
 ] as const
 export type Field = (typeof SETTINGS)[number]['field']
 // Each switch is true on its first option, the default.
-export const settings: Record<Field, boolean> = { stable_updates: true, usage_stats: true, standard_size: true }
+export const settings: Record<Field, boolean> = { standard_size: true }
 
 // ── diagnostics.ts ────────────────────────────────────────────────────────
 // The local diagnostics log: what the plugin did and every problem it noticed,
 // as one JSON object per line in TMP/debug.log, for debugging on a real
 // machine without screenshots. Local only: it holds paths and sizes, so it
-// is never sent anywhere, and nothing here may call track() (PostHog).
+// is never sent anywhere.
 //
 //   SHOW_YOUR_WORK_DEBUG=1   every event is kept and flushed once a second
 //   always                   problems are kept in memory (a few hundred at
@@ -4504,186 +4384,6 @@ export function diagnosis(now: number, kept: Problem[] = problems, isLogging = s
 // purpose: 3%, measured before the box is rounded down to whole columns.
 export const isWiderThanBox = (pixels: number, columns: number, cellWidth: number) => pixels > (columns + 1) * cellWidth * 1.03
 
-// ── updater.ts ────────────────────────────────────────────────────────────
-// Updates: a daily check of the install's channel, and the move between
-// channels. The updater will be turned off after the plugin moves to the
-// Claude Code plugin directory, which keeps it up to date instead.
-
-
-// Keeps the plugin current without the user turning on marketplace
-// auto-update: once a day it asks GitHub for the version on the install's
-// channel and, when it is newer, updates through Claude Code's own plugin
-// commands, quietly. The new version runs from the next session.
-//
-// Two channels, one branch each: Stable releases follow `releases`, Latest
-// follows `latest`. `main` is where work happens and nothing updates from
-// it; an install still on it moves to its channel's branch. Moving means
-// re-adding the marketplace at that branch and installing the plugin again
-// (its store is kept), in a process of its own (see moveTo). Off with
-// SHOW_YOUR_WORK_AUTO_UPDATE=0 or CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, and
-// never for an install pinned to a release tag.
-const REPO = 'iamumeransari/claude-show-your-work'
-const MARKETPLACE = 'iamumeransari'
-export const PLUGIN = 'show-your-work'
-const SOURCE = `https://github.com/${REPO}.git`
-export const BRANCHES = { stable: 'releases', latest: 'latest' } as const
-type Branch = (typeof BRANCHES)[keyof typeof BRANCHES]
-const DAY_MS = 24 * 60 * 60 * 1000
-
-// A version folder from before 0.6.0 in the plugin cache: this install was
-// used before 0.6.0's welcome, so it was updated past it without seeing it.
-export const hadVersionBefore06 = (names: string[]) => names.some(name => /^\d+\.\d+\.\d+$/.test(name) && isNewer('0.6.0', name))
-
-// 1.10.0 is newer than 1.9.3; anything after a dash is ignored.
-export function isNewer(latest: string, current: string): boolean {
-  const parts = (v: string) => (v.split('-')[0] ?? '').split('.').map(n => Number(n) || 0)
-  const a = parts(latest), b = parts(current)
-  for (let i = 0; i < Math.max(a.length, b.length); i++) {
-    if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) > (b[i] ?? 0)
-  }
-
-  return false
-}
-
-// Where Claude Code's CLI usually is, when the login shell didn't find it
-// (state.claudePath, found at session start) and it isn't on the session's PATH.
-const CLAUDE_BINARIES = ['claude', '.local/bin/claude', '.claude/local/claude', '.npm-global/bin/claude', '/opt/homebrew/bin/claude', '/usr/local/bin/claude', '/usr/bin/claude']
-let claudeBinary = ''
-
-// Runs Claude Code's CLI with the session's own environment (its PATH and
-// CLAUDE_CONFIG_DIR), so it changes this install and no other.
-async function claude($: EngineInterface, args: string[]) {
-  const known = CLAUDE_BINARIES.map(b => (b.startsWith('.') ? `${state.home}/${b}` : b))
-  const candidates = [...new Set([claudeBinary, state.claudePath, ...known].filter(Boolean))]
-  for (const bin of candidates) {
-    const r = await $.process.run([bin, ...args], { timeoutMs: 120_000 }).catch(() => undefined)
-    if (r) {
-      claudeBinary = bin
-      return r
-    }
-  }
-  return undefined
-}
-
-function jsonOf<T>(text: string | undefined, fallback: T): T {
-  try { return text ? (JSON.parse(text) as T) : fallback } catch { return fallback }
-}
-
-// The automatic check at session start: at most once a day, never when
-// SHOW_YOUR_WORK_AUTO_UPDATE=0 or CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC is set. It installs any newer version without asking. Claude Code only loads
-// the new version in a new session, so once one is installed a status line
-// under the prompt says so until Claude Code restarts.
-export async function checkForUpdate($: EngineInterface, current: string, branch: Branch = BRANCHES.stable) {
-  const off = await $.env.get('SHOW_YOUR_WORK_AUTO_UPDATE')
-  if (/^(0|false|off|no)$/i.test(off ?? '')) return
-  if (await $.env.get('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC')) return
-  const now = await $.clock.now()
-  if (now - Number((await $.store.get('updateCheckedAt')) ?? 0) < DAY_MS) return
-  const found = await findUpdate($, current, branch)
-  // Every check says how it ended, so a stuck install shows why. Only a check
-  // that got through counts for the day; one that couldn't run tries again
-  // at the next session.
-  track('update_check', { result: found.kind, channel: branch, ...('latest' in found ? { latest: found.latest } : {}) })
-  if (found.kind !== 'offline' && found.kind !== 'no_cli') await $.store.set('updateCheckedAt', now)
-  const isReady = found.kind === 'pending' || ((found.kind === 'update' || found.kind === 'move') && (await installUpdate($, found, current)))
-  if (isReady && 'latest' in found) $.ui.status(`show-your-work ${found.latest} is ready. Restart Claude Code to use it.`)
-}
-
-// The result of checking for an update:
-//   update   a newer version is on the channel's branch
-//   move     the install follows a different branch than the chosen channel
-//   current  already on the newest version
-//   pending  the newest version is installed but runs from the next session
-//   folder   loaded from a local folder (development), so it never updates
-//   pinned   installed from a fixed tag such as #v0.5.14, so it never updates
-//   offline  GitHub couldn't be reached
-//   no_cli   Claude Code's CLI couldn't be found or didn't answer
-export type Found =
-  | { kind: 'update'; latest: string; scope: string }
-  | { kind: 'move'; latest: string; branch: Branch; market: { url?: string; ref?: string } }
-  | { kind: 'current'; latest: string }
-  | { kind: 'pending'; latest: string }
-  | { kind: 'folder' }
-  | { kind: 'busy' }
-  | { kind: 'pinned'; ref: string }
-  | { kind: 'offline' }
-  | { kind: 'no_cli' }
-export async function findUpdate($: EngineInterface, current: string, branch: Branch): Promise<Found> {
-  // No such branch yet, or no network: nothing to say about it.
-  // Each channel's address written out in full, so the directory review can read it.
-  const r = await (branch === BRANCHES.latest
-    ? $.http.fetch('https://raw.githubusercontent.com/iamumeransari/claude-show-your-work/latest/.claude-plugin/plugin.json')
-    : $.http.fetch('https://raw.githubusercontent.com/iamumeransari/claude-show-your-work/releases/.claude-plugin/plugin.json')
-  ).catch(() => null)
-  if (!r?.ok) return { kind: 'offline' }
-  const latest = String(jsonOf<{ version?: string }>(r.text, {}).version ?? '')
-  if (!latest) return { kind: 'offline' }
-
-  // A marketplace read from a folder is someone working on the plugin: leave it.
-  const listed = await claude($, ['plugin', 'marketplace', 'list', '--json'])
-  if (!listed || listed.exitCode !== 0) return { kind: 'no_cli' }
-  const markets = jsonOf<{ name: string; source: string; url?: string; ref?: string }[]>(listed.stdout, [])
-  const market = markets.find(m => m.name === MARKETPLACE)
-  // An installed copy whose marketplace is missing is mid channel move
-  // (MOVE_SH removes it, then adds it back): not a folder copy.
-  const isCached = isInstalledCopy(await Promise.resolve().then(() => $.plugin.root).catch(() => ''))
-  if (market?.source === 'directory' || (!market && !isCached)) return { kind: 'folder' }
-  if (!market) return { kind: 'busy' }
-  // Added with #v0.5.14 or another ref: the user chose that version.
-  const ref = market.ref ?? 'main'
-  if (ref !== 'main' && !Object.values(BRANCHES).includes(ref as Branch)) return { kind: 'pinned', ref }
-  if (ref !== branch) return { kind: 'move', latest, branch, market }
-  if (!isNewer(latest, current)) return { kind: 'current', latest }
-  const plugins = jsonOf<{ id: string; scope?: string; version?: string }[]>((await claude($, ['plugin', 'list', '--json']))?.stdout, [])
-  const installed = plugins.find(p => p.id === `${PLUGIN}@${MARKETPLACE}`)
-  if (!installed) return isCached ? { kind: 'busy' } : { kind: 'folder' }
-  // Already fetched by an earlier check; it runs from the next session.
-  if (installed.version && !isNewer(latest, installed.version)) return { kind: 'pending', latest }
-  return { kind: 'update', latest, scope: installed.scope ?? 'user' }
-}
-
-// Installs an update findUpdate found, through Claude Code's plugin commands.
-// A channel move runs detached and finishes in the background. Returns true
-// when the install (or starting the move) succeeded.
-export async function installUpdate($: EngineInterface, found: Extract<Found, { kind: 'update' | 'move' }>, current: string) {
-  if (found.kind === 'move') return moveTo($, found.branch, found.market)
-  await claude($, ['plugin', 'marketplace', 'update', MARKETPLACE])
-  const done = await claude($, ['plugin', 'update', `${PLUGIN}@${MARKETPLACE}`, '--scope', found.scope])
-  if (done?.exitCode !== 0) {
-    track('update_failed', { from: current, to: found.latest })
-    return false
-  }
-  track('update_installed', { from: current, to: found.latest })
-  return true
-}
-
-// Puts the install on another channel's branch: the marketplace again at that
-// branch, then the plugin from it. The steps run in a process of their own,
-// outside the session, so quitting Claude Code halfway can't leave the plugin
-// uninstalled; when the branch can't be added or its plugin won't install,
-// the old source and the plugin go back, a second time if the first fails.
-export const MOVE_SH = [
-  'exec </dev/null >/dev/null 2>&1',
-  'c=$1 url=$2 branch=$3 old=$4 scope=$5 market=$6 id=$7',
-  '"$c" plugin marketplace remove "$market" || exit 0',
-  '"$c" plugin marketplace add "$url#$branch" && "$c" plugin install "$id" --scope "$scope" && exit 0',
-  '"$c" plugin marketplace remove "$market"',
-  'for try in 1 2; do "$c" plugin marketplace add "$old"; "$c" plugin install "$id" --scope "$scope" && exit 0; done',
-  'exit 1',
-].join('\n')
-// Starts a script in a session of its own, so it outlives this one.
-const DETACH = ['perl', '-MPOSIX', '-e', 'fork and exit; POSIX::setsid(); exec @ARGV']
-async function moveTo($: EngineInterface, branch: Branch, market: { url?: string; ref?: string }) {
-  const plugins = jsonOf<{ id: string; scope?: string }[]>((await claude($, ['plugin', 'list', '--json']))?.stdout, [])
-  const installed = plugins.find(p => p.id === `${PLUGIN}@${MARKETPLACE}`)
-  if (!installed || !claudeBinary) return false
-  const url = market.url ?? SOURCE
-  const old = market.ref ? `${url}#${market.ref}` : url
-  track('channel_move', { from: market.ref ?? 'main', to: branch })
-  const r = await $.process.run([...DETACH, 'sh', '-c', MOVE_SH, 'move', claudeBinary, url, branch, old, installed.scope ?? 'user', MARKETPLACE, `${PLUGIN}@${MARKETPLACE}`]).catch(() => undefined)
-  return r?.exitCode === 0
-}
-
 // ── onboarding.tsx ────────────────────────────────────────────────────────
 // First run and settings: the settings pane, the welcome and the tour.
 
@@ -4694,13 +4394,6 @@ async function moveTo($: EngineInterface, branch: Branch, market: { url?: string
 export const WELCOME = 'show-your-work-welcome'
 // The settings pane's and the tour's redraws. Declared in each file that
 // reads or updates it: the engine only reads an atom declared in the same file.
-
-// A no to usage data given before these settings (0.5.12's question, 0.5.16's command) stays a no.
-// Updates are on for everyone: fixes have to reach every install.
-export const earlierNo = (consent: unknown, statsOff: unknown, updatesOff: unknown) => {
-  const asked = consent && typeof consent === 'object' ? consent as { stats?: unknown; updates?: unknown } : {}
-  return { isStatsOff: statsOff === true || asked.stats === false, isUpdatesOff: updatesOff === true || asked.updates === false }
-}
 
 // Reads the saved settings once per plugin load. A reload starts with the
 // defaults in memory, and without this pictures would be laid out as Standard
@@ -4715,7 +4408,6 @@ export async function ensureSettings($: EngineInterface) {
 
 export async function loadSettings($: EngineInterface) {
   const saved = ((await $.store.get('settings')) ?? {}) as Partial<Record<Field, unknown>>
-  if (typeof saved.usage_stats !== 'boolean' && earlierNo(await $.store.get('consent'), await $.store.get('statsOff'), null).isStatsOff) settings.usage_stats = false
   for (const { field } of SETTINGS) if (typeof saved[field] === 'boolean') settings[field] = saved[field] as boolean
 }
 
@@ -4723,41 +4415,10 @@ async function switchSetting($: EngineInterface, field: Field, value: boolean) {
   // The saved choices, not this module's copy: a reload resets the copy.
   await loadSettings($)
   settings[field] = value
-  act(`setting_${field}_${value ? 'first' : 'second'}`)
   await $.store.set('settings', { ...settings })
-  // The profile keeps the install's current choice of update channel.
-  if (field === 'stable_updates') track('settings_changed', { $set: { update_channel: value ? 'stable' : 'latest' } })
-  if (field === 'standard_size') {
-    track('settings_changed', { $set: { picture_size: value ? 'standard' : 'large' } })
-    // Players already on screen redraw at the new size.
-    redraw($)
-  }
-  // Turning usage data off sends one last signal saying so, then nothing more.
-  if (field === 'usage_stats' && !value && state.isOn) {
-    track('usage_data_turned_off', { $set: { usage_data: 'off' } })
-    await flush($).catch(() => undefined)
-  }
-  // Off means off: nothing queued is kept for later.
-  if (field === 'usage_stats' && !value) {
-    state.isOn = false
-    state.queue = []
-  }
-  if (field === 'usage_stats' && value && state.isWelcomed) await startTelemetry($, state.statsContext)
-  // A new channel is followed now.
-  if (field === 'stable_updates' && state.isWelcomed) {
-    await $.store.set('updateCheckedAt', 0)
-    void checkForUpdate($, state.pluginVersion, value ? BRANCHES.stable : BRANCHES.latest).catch(() => undefined)
-  }
+  // Players already on screen redraw at the new size.
+  if (field === 'standard_size') redraw($)
   await update($, welcome, n => n + 1)
-}
-
-// Updates and usage counts wait for the welcome on a first run, so a switch
-// turned off there is off before anything is sent.
-export async function startBackground($: EngineInterface) {
-  if (hasStarted) return
-  hasStarted = true
-  if (settings.usage_stats) await startTelemetry($, state.statsContext)
-  await checkForUpdate($, state.pluginVersion, settings.stable_updates ? BRANCHES.stable : BRANCHES.latest)
 }
 
 // The first run (see 'toured'): the plugin runs /show-your-work once, and its output row
@@ -4770,109 +4431,17 @@ export async function openWelcome($: EngineInterface) {
   await openTour($)
 }
 
-// /show-your-work update opens this pane. It checks GitHub for the newest
-// version on the person's channel (Stable or Latest) right away, skipping the
-// once-a-day limit, then offers Install. Nothing installs until they press it.
-export const UPDATE = 'show-your-work-update'
-type UpdateCheck =
-  | { phase: 'checking' }
-  | { phase: 'found'; found: Found }
-  | { phase: 'installing'; latest: string }
-  | { phase: 'installed'; latest: string }
-  | { phase: 'failed' }
-let updateCheck: UpdateCheck = { phase: 'checking' }
-export async function openUpdate($: EngineInterface) {
-  updateCheck = { phase: 'checking' }
-  await $.ui.open({ id: UPDATE, title: 'Updates', focus: true, closeOnEscape: true, holdToasts: true, rows: 9, columns: 70 })
-  await update($, welcome, n => n + 1)
-  await loadSettings($)
-  const branch = settings.stable_updates ? BRANCHES.stable : BRANCHES.latest
-  const found = await findUpdate($, state.pluginVersion, branch).catch((): Found => ({ kind: 'offline' }))
-  updateCheck = { phase: 'found', found }
-  await update($, welcome, n => n + 1)
-}
-
-async function installFound($: EngineInterface, found: Extract<Found, { kind: 'update' | 'move' }>) {
-  act('update_install')
-  updateCheck = { phase: 'installing', latest: found.latest }
-  await update($, welcome, n => n + 1)
-  const isDone = await installUpdate($, found, state.pluginVersion).catch(() => false)
-  updateCheck = isDone ? { phase: 'installed', latest: found.latest } : { phase: 'failed' }
-  await update($, welcome, n => n + 1)
-}
-
-export function UpdatePane(ui: Ui, $: EngineInterface) {
-  const { Box, Text, Button } = ui
-  const channel = settings.stable_updates ? 'Stable releases' : 'Latest releases'
-  const close = <Button key="update-close" label="Close" onPress={() => void $.ui.close({ id: UPDATE })} />
-  const c = updateCheck
-  const found = c.phase === 'found' ? c.found : null
-  // Each outcome of the check sets a bold headline, a dim second line, and
-  // the buttons. Install shows only when there is a newer version.
-  let head = 'Checking for updates…'
-  let line = `On ${state.pluginVersion} · ${channel}`
-  let actions: Ui[] = []
-  if (found?.kind === 'update' || found?.kind === 'move') {
-    head = `Version ${found.latest} is available`
-    actions = [<Button key="update-install" variant="primary" label="Install" onPress={() => void installFound($, found)} />, close]
-  } else if (found?.kind === 'current') {
-    head = "You're on the latest version"
-    actions = [close]
-  } else if (found?.kind === 'pending') {
-    head = `Version ${found.latest} is installed`
-    line = 'Restart Claude Code to start using it.'
-    actions = [close]
-  } else if (found?.kind === 'folder') {
-    head = 'This copy runs from a folder, so it doesn\'t update'
-    actions = [close]
-  } else if (found?.kind === 'busy') {
-    head = 'An update is being installed'
-    line = 'Check again in a minute.'
-    actions = [close]
-  } else if (found?.kind === 'pinned') {
-    head = `This install is pinned to ${found.ref}, so it doesn't update`
-    actions = [close]
-  } else if (found?.kind === 'no_cli') {
-    head = "Couldn't find Claude Code's command"
-    line = 'Update by hand with: claude plugin update show-your-work@iamumeransari'
-    actions = [close]
-  } else if (found?.kind === 'offline') {
-    head = "Couldn't check for updates"
-    line = 'Check your connection and run /show-your-work update again.'
-    actions = [close]
-  } else if (c.phase === 'installing') {
-    head = `Installing ${c.latest}…`
-  } else if (c.phase === 'installed') {
-    head = `Version ${c.latest} is installed`
-    line = 'Restart Claude Code to start using it.'
-    actions = [close]
-  } else if (c.phase === 'failed') {
-    head = "Couldn't install the update"
-    line = `Try again, or run: claude plugin update ${PLUGIN}@iamumeransari`
-    actions = [close]
-  }
-  return (
-    <Box flexDirection="column" paddingX={2} paddingBottom={1}>
-      <Text bold>{head}</Text>
-      <Text dimColor>{line}</Text>
-      {actions.length > 0 && <Box flexDirection="row" columnGap={2} marginTop={1}>{actions}</Box>}
-    </Box>
-  )
-}
-
 // /show-your-work: the switches, in a pane.
 export async function openSettings($: EngineInterface) {
   await $.ui.open({ id: WELCOME, title: 'Settings', focus: true, closeOnEscape: true, holdToasts: true, rows: 10, columns: 70 })
   await update($, welcome, n => n + 1)
 }
 
-let hasStarted = false
 async function finishWelcome($: EngineInterface) {
   if (state.isWelcomed) return
   state.isWelcomed = true
   // Where pictures can't show yet, the tour waits for a session where they do.
   if (state.canImage) await $.store.set('toured', true)
-  await startBackground($)
 }
 
 // A five-second recording of a form being tested, played in the real
@@ -4912,7 +4481,7 @@ export function Settings(ui: Ui, $: EngineInterface) {
     <Box flexDirection="column" paddingX={2} paddingBottom={1}>
       <Box flexDirection="row" columnGap={2} marginBottom={1}>
         <Button key="close" label="✕ Close" onPress={() => void $.ui.close({ id: WELCOME })} />
-        <Button key="tour" label="Take a tour" onPress={() => { act('tour_from_settings'); void $.ui.close({ id: WELCOME }).then(() => openTour($)) }} />
+        <Button key="tour" label="Take a tour" onPress={() => { void $.ui.close({ id: WELCOME }).then(() => openTour($)) }} />
       </Box>
       <Box marginBottom={1}><Text bold>Show Your Work Settings</Text></Box>
       {SettingRows(ui, $)}
@@ -4948,13 +4517,12 @@ function SettingRows(ui: Ui, $: EngineInterface) {
           })}
         </Box>
       ))}
-      <Box marginTop={1}><Text dimColor>Usage data is anonymous and helps fix bugs and improve the product experience. No sensitive data is ever shared.</Text></Box>
     </Box>
   )
 }
 
 // The welcome row: the opening in the real player, with its side list, then
-// what to ask and one quiet line about updates and usage counts.
+// what to ask, and where the tour is.
 export async function Opening($: EngineInterface, e: Parameters<EngineInterface['ui']['resolve']>[0], site: string, viewport?: { columns: number; rows: number }) {
   const { Box, Text } = $.ui.resolve(e) as Ui
   let view = null
@@ -4967,7 +4535,7 @@ export async function Opening($: EngineInterface, e: Parameters<EngineInterface[
       {view ?? <Text bold color="claude">✦ show-your-work is installed and ready</Text>}
       <Box flexDirection="column">
         <Text>Claude now shows you pictures and videos right here in the chat. Try asking Claude to create something and show it to you in the chat, as an image or a recording.</Text>
-        <Text dimColor>It keeps itself updated and sends anonymous usage counts. Change this with /show-your-work, and see every feature with /show-your-work tour.</Text>
+        <Text dimColor>See every feature with /show-your-work tour.</Text>
       </Box>
     </Box>
   )
@@ -5069,7 +4637,6 @@ async function openTour($: EngineInterface) {
 // What /show-your-work tour does before its row draws: the first stop, and
 // the demo's media read in the background.
 export function startTour($: EngineInterface) {
-  act('tour_open')
   state.isTourPending = true
   state.isTourDone = false
   state.tourStop = 0
@@ -5100,7 +4667,6 @@ export function goToStop($: EngineInterface, to: number) {
 const mediaOf = (s: Stop) => (s.media === 'splash' ? splash : s.media ? tourMedia[s.media] : null) ?? null
 
 async function finishTour($: EngineInterface, isSkip: boolean) {
-  act(isSkip ? `tour_skip_${state.tourStop}` : 'tour_done')
   stop($, state.tourSite)
   state.isTourDone = true
   await update($, welcome, n => n + 1)
@@ -5177,11 +4743,11 @@ function TourBar(ui: Ui, $: EngineInterface, columns: number) {
         <Box flexGrow={1} flexShrink={1}><Text bold color="inverseText">{(isDone ? `✓  ${s.tag}` : s.tag).toUpperCase()}</Text></Box>
         <Box flexDirection="row" columnGap={3} flexShrink={0}>
           {/* No Back on the last step: it's a wrap-up, and Done is the only choice. */}
-          {at > 0 && !isLast && onBar('prev', '‹ Back', () => { act(`tour_back_${at}`); goToStop($, at - 1) }, { isButton: true })}
+          {at > 0 && !isLast && onBar('prev', '‹ Back', () => { goToStop($, at - 1) }, { isButton: true })}
           {/* Next fills in once the step is done; until then it's a plain button. */}
           {isLast
             ? onBar('done', 'Done ›', () => void finishTour($, false), { isMain: true, isButton: true })
-            : onBar('next', 'Next ›', () => { act(`tour_next_${at}`); goToStop($, at + 1) }, { isMain: !s.goal || isDone, isButton: true })}
+            : onBar('next', 'Next ›', () => { goToStop($, at + 1) }, { isMain: !s.goal || isDone, isButton: true })}
           {!isLast && onBar('skip', 'Skip tour', () => void finishTour($, true))}
         </Box>
       </Box>
@@ -5337,8 +4903,6 @@ export const register: Register = on => {
     state.hasVideoTools = false
     await loadSettings($)
     void (async () => {
-      const manifest = JSON.parse(await $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`)) as { version?: string }
-      state.pluginVersion = manifest.version ?? '0.0.0'
       const program = (await $.env.get('TERM_PROGRAM')) ?? ''
       const term = (await $.env.get('TERM')) ?? ''
       const herdrApp = !!(await $.env.get('HC_TERMINAL_ID')) || (await $.env.get('__CFBundleIdentifier')) === 'dev.herdr.app'
@@ -5364,39 +4928,17 @@ export const register: Register = on => {
         state.probed = true
         state.drawCause = isDesktop ? 'desktop' : NO_PLACEHOLDERS[state.terminalName] ? 'terminal' : causeOf(state.inTmux, state.terminalName, state.isForced)
       }
-      state.statsContext = {
-        plugin_version: state.pluginVersion,
-        claude_code_version: (await $.session.version().catch(() => ({ base: '' }))).base ?? '',
-        terminal,
-        has_ffmpeg: await exists($, state.ffmpeg),
-        os: state.isMac ? 'macos' : 'linux',
-      }
-      // Every install sees the welcome and tour once, an update included:
-      // installs from before 0.6.2 never had one. 0.6.0 stored 'welcomed' both
-      // when it showed the welcome and when it skipped it for an update; an
-      // older version's folder still beside this one marks the update.
+      // Every install sees the welcome and tour once.
       state.isWelcomed = !!(await $.store.get('toured'))
-      if (!state.isWelcomed && await $.store.get('welcomed')) {
-        const versions = await $.fs.list($.plugin.root.replace(/\/+$/, '').replace(/\/[^/]+$/, '')).catch(() => [])
-        if (!hadVersionBefore06(versions.map(f => f.name))) {
-          state.isWelcomed = true
-          await $.store.set('toured', true)
-        }
-      }
-      // An update keeps what it already ran: its updates and usage counts start
-      // now, and only a fresh install waits for the welcome.
-      const isUpdate = (await Promise.all(['welcomed', 'installId', 'updateCheckedAt'].map(key => $.store.get(key)))).some(value => value !== undefined && value !== null)
-      if (!state.isWelcomed && isUpdate) await startBackground($)
-      if (state.isWelcomed) await startBackground($)
-      else await openWelcome($)
+      if (!state.isWelcomed) await openWelcome($)
     })().catch(() => undefined)
     // Frames and converted pictures a week old go; a window that scrolls back
     // into view cuts its frames again from the source.
     void $.process.run(['sh', '-c', CLEAN_SH, state.TMP]).then(() => trimFrames($))
     await $.command.register({
       name: 'show-your-work',
-      description: 'Settings for show-your-work; /show-your-work tour for the tour, /show-your-work update to check for updates, /show-your-work diagnose for recent problems',
-      argumentHint: '[settings|tour|update|diagnose]',
+      description: 'Settings for show-your-work; /show-your-work tour for the tour, /show-your-work diagnose for recent problems',
+      argumentHint: '[settings|tour|diagnose]',
     })
     await $.command.register({
       name: 'img',
@@ -5473,7 +5015,6 @@ export const register: Register = on => {
     // The next session starts with sound on, and nothing sounds past this one.
     state.isSoundOn = true
     haltAllSound('session_end')
-    await flush($).catch(() => undefined)
     await stopForwarding($)
 
     return next(e)
@@ -5513,11 +5054,9 @@ export const register: Register = on => {
       // wipes the module's memory.
       await $.process.run(['sh', '-c', 'printf "%s" "$1" > "$0"', `${await storeOf($)}/${id}.shown`, JSON.stringify(shown)]).catch(() => undefined)
 
-      track('img_command', { kind: shown.frames ? 'video' : 'image' })
       return { text: `Showing ${shown.title}.\n${MARK}#${id}` }
     } catch (err) {
       const n = noticeOf(err, expand(arg, state.cwd, state.home), state.home)
-      track('show_failed', { from: 'img_command', reason: REASONS[n.kind] })
       return { text: n.message }
     }
   })
@@ -5533,11 +5072,9 @@ export const register: Register = on => {
       shownById.set(id, shown)
       await $.process.run(['sh', '-c', 'printf "%s" "$1" > "$0"', `${await storeOf($)}/${id}.shown`, JSON.stringify(shown)]).catch(() => undefined)
 
-      track('page_command', { kind: 'image' })
       return { text: `Previewing ${shown.title}. Open page opens it in your browser.\n${MARK}#${id}` }
     } catch (err) {
       const n = noticeOf(err, arg, state.home)
-      track('show_failed', { from: 'page_command', reason: REASONS[n.kind] })
       return { text: n.message }
     }
   })
@@ -5553,11 +5090,9 @@ export const register: Register = on => {
       shownById.set(id, shown)
       await $.process.run(['sh', '-c', 'printf "%s" "$1" > "$0"', `${await storeOf($)}/${id}.shown`, JSON.stringify(shown)]).catch(() => undefined)
 
-      track('audio_command', { kind: shown.frames ? 'audio' : 'image' })
       return { text: `Showing ${shown.title}.${soundUsable() ? ' Press Play to hear it.' : ''}\n${MARK}#${id}` }
     } catch (err) {
       const n = noticeOf(err, arg, state.home)
-      track('show_failed', { from: 'audio_command', reason: REASONS[n.kind] })
       return { text: n.message }
     }
   })
@@ -5573,11 +5108,9 @@ export const register: Register = on => {
       shownById.set(id, shown)
       await $.process.run(['sh', '-c', 'printf "%s" "$1" > "$0"', `${await storeOf($)}/${id}.shown`, JSON.stringify(shown)]).catch(() => undefined)
 
-      track('doc_command', { kind: 'document' })
       return { text: `Showing ${shown.title} (${shown.pages?.count ?? 1} page${(shown.pages?.count ?? 1) === 1 ? '' : 's'}).\n${MARK}#${id}` }
     } catch (err) {
       const n = noticeOf(err, arg, state.home)
-      track('show_failed', { from: 'doc_command', reason: REASONS[n.kind] })
       return { text: n.message }
     }
   })
@@ -5660,23 +5193,6 @@ export const register: Register = on => {
       if (!shown.frames && kept.copy !== kept.real)
         remember(kept.copy, { kind: shown.kind, path: shown.path, source: shown.source, width: shown.width, height: shown.height, title: 'Original', generation: shown.generation })
       const what = shown.kind === 'audio' ? `audio, ${clock(shown.frames!.duration)}` : shown.kind === 'document' ? `document, ${shown.pages?.count ?? 1} pages` : shown.frames ? `video, ${clock(shown.frames.duration)}` : `${shown.sourceWidth ?? shown.width}×${shown.sourceHeight ?? shown.height}`
-      const checks = [...(shown.checks ?? []), ...(shown.compare?.checks ?? [])]
-      track(shown.frames ? 'video_shown' : 'image_shown', {
-        format: (input.path.match(/\.([a-z0-9]+)$/i)?.[1] ?? 'none').toLowerCase().slice(0, 5),
-        ...(shown.frames ? { duration: Math.round(shown.frames.duration * 10) / 10, frames: shown.frames.count } : {}),
-        has_compare: !!shown.compare,
-        is_side_by_side: !!shown.pair,
-        is_revision: !!input.previous,
-        versions: shown.history?.length ?? 0,
-        changes: shown.changes?.length ?? 0,
-        has_custom_changes_title: !!input.changes_title,
-        summary_lines: shown.summary?.length ?? 0,
-        summary_ok: shown.summary ? shown.summary.every(l => l.ok) : undefined,
-        checks: checks.length,
-        checks_failed: checks.filter(c => !c.ok).length,
-        has_url: !!input.url,
-        has_pr: !!input.pr,
-      })
 
       const handle = kept.id ? ` #${kept.id}${kept.chain.length ? `, version ${kept.chain.length + 1} after #${kept.chain.at(-1)!.id}` : ''}.` : ''
       const hint = (kept.missing ? ` #${kept.missing} wasn't found, so this has no history.` : '') + handle
@@ -5697,7 +5213,6 @@ export const register: Register = on => {
       if (copied) void $.process.run(['rm', '-f', '--', copied, copied.replace(/\.[^./]+$/, '.json')]).catch(() => undefined)
       const n = noticeOf(err, expand(input.path ?? '', state.cwd, state.home), state.home)
       notices.set(e.tool_use_id, n)
-      track('show_failed', { from: String((e as { tool?: string }).tool ?? '').endsWith('video') ? 'show_video' : String((e as { tool?: string }).tool ?? '').endsWith('audio') ? 'show_audio' : String((e as { tool?: string }).tool ?? '').endsWith('document') ? 'show_document' : 'show_image', reason: REASONS[n.kind] })
       return { deny: `show-your-work: ${n.message}` }
     }
   }).catch(() => ({ deny: 'show-your-work: it could not be shown.' }))
@@ -5780,10 +5295,6 @@ export const register: Register = on => {
     // What went wrong lately, for a bug report: problems noticed (always kept)
     // and where the full local log is. Nothing here is sent anywhere.
     if (/^diagnose$/i.test(invoked.args.trim())) return { text: diagnosis(await $.clock.now()) }
-    if (/^update$/i.test(invoked.args.trim())) {
-      void openUpdate($).catch(() => undefined)
-      return { text: 'Checking for show-your-work updates.' }
-    }
     // /show-your-work settings (or setting) opens them, never closes them.
     const isSettings = /^settings?$/i.test(invoked.args.trim())
     // Run again while they're open, the settings close.
@@ -5793,12 +5304,6 @@ export const register: Register = on => {
     }
     await openSettings($)
     return { text: 'Opened the show-your-work settings.' }
-  })
-
-  on('ui.render', { component: 'Pane', requestId: UPDATE }, async ($, e) => {
-    await setUp($)
-    await read($, welcome)
-    return UpdatePane($.ui.resolve(e) as Ui, $)
   })
 
   on('ui.render', { component: 'Pane', requestId: WELCOME }, async ($, e) => {

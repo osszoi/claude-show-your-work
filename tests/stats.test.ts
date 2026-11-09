@@ -1,20 +1,9 @@
 import { expect, test } from 'claude-code/testing'
 import { state } from '../hooks/state'
 
-import { isStatsBlocked, nicknameOf } from '../hooks/telemetry'
 import { noticeOf, NO_FFMPEG, noFfmpeg } from '../hooks/media'
-import { hadVersionBefore06, isNewer } from '../hooks/updater'
 import { cantDraw, causeOf, forceLine, terminalOf, withForceLine, withoutPicturesLine } from '../hooks/player'
-import { earlierNo } from '../hooks/onboarding'
 import { outerOf } from '../hooks/tmux'
-
-test('a newer version is spotted, an older or equal one is not', () => {
-  expect(isNewer('0.5.0', '0.4.0')).toBe(true)
-  expect(isNewer('1.10.0', '1.9.3')).toBe(true)
-  expect(isNewer('0.4.0', '0.4.0')).toBe(false)
-  expect(isNewer('0.4.0', '0.5.0')).toBe(false)
-  expect(isNewer('1.0.0-beta', '0.9.0')).toBe(true)
-})
 
 
 
@@ -94,36 +83,6 @@ test('Linux gets its own ffmpeg notice, with a package manager instead of Homebr
   expect(noticeOf(new Error(noFfmpeg(true)), '/Users/u/a.mp4', '/Users/u').text.includes('brew install ffmpeg')).toBe(true)
 })
 
-test('each install gets a made-up name, the same every time', () => {
-  const id = '8f14e45f-ceea-467f-a9d3-6c1b7c8d2e11'
-  expect(nicknameOf(id)).toBe(nicknameOf(id))
-  expect(/^[A-Z][a-z]+ [A-Z][a-z]+ \d{1,3}$/.test(nicknameOf(id))).toBe(true)
-  expect(nicknameOf(id)).not.toBe(nicknameOf('0b7e0d1a-1234-4c4c-9a9a-aaaaaaaaaaaa'))
-})
-
-
-test('a no given before 0.6.0 is kept, and only a no', () => {
-  expect(earlierNo(undefined, true, undefined)).toEqual({ isStatsOff: true, isUpdatesOff: false })
-  expect(earlierNo({ stats: false, updates: true }, undefined, undefined)).toEqual({ isStatsOff: true, isUpdatesOff: false })
-  expect(earlierNo({ stats: true, updates: false }, false, undefined)).toEqual({ isStatsOff: false, isUpdatesOff: true })
-  expect(earlierNo(null, undefined, undefined)).toEqual({ isStatsOff: false, isUpdatesOff: false })
-})
-
-test('usage data stays off under any of its opt-outs, Claude Code\'s own included', () => {
-  expect(isStatsBlocked(undefined, undefined, undefined)).toBe(false)
-  expect(isStatsBlocked('0', undefined, undefined)).toBe(true)
-  expect(isStatsBlocked(undefined, '1', undefined)).toBe(true)
-  expect(isStatsBlocked(undefined, undefined, '1')).toBe(true)
-  expect(isStatsBlocked(undefined, undefined, 'true')).toBe(true)
-})
-
-test('an install used before 0.6.0 is told from one that started on 0.6', () => {
-  expect(hadVersionBefore06(['0.4.0', '0.5.16', '0.6.1'])).toBe(true)
-  expect(hadVersionBefore06(['0.5.16', '0.6.2'])).toBe(true)
-  expect(hadVersionBefore06(['0.6.0', '0.6.1', '0.6.2'])).toBe(false)
-  expect(hadVersionBefore06(['.DS_Store', 'assets', 'hooks'])).toBe(false)
-  expect(hadVersionBefore06([])).toBe(false)
-})
 
 test('the terminal is recognised from what it sets in the environment', () => {
   const env = (o: Partial<{ program: string; term: string; kitty: boolean; konsole: boolean; lcTerminal: string }>) => ({ program: '', term: '', kitty: false, konsole: false, ...o })

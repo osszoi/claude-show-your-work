@@ -7,7 +7,6 @@ import type { Check, KeyChange, Shown, Summary } from '../types'
 import { settings, state } from './state'
 import { clock, drawBox, layoutOf, oneLine, pagesOf, pixelsFor, PX_MAX, remeasure, SIDE, SIDEBAR, sizeFor, sizeStep, tabLabel, targetBox, wrapWords } from './layout'
 import { debug, event, isWiderThanBox, problem } from './diagnostics'
-import { act, track } from './telemetry'
 import { compareFrame, frameFile, frameReady, htmlOpenArgv, rawSizeOf, SKIP_SECONDS, identityOf, isFrameCut, isGone, isRunCut, keyOf, MAX_STILL, PAIR_GAP, pairReady, pngSize, prepareVideo, readsAnyFile, BYTES_MAX, recutFrame, rescaleVideo, toOriginal, toUpdated } from './media'
 import { prepared, preparedOf } from './history'
 import { docPage, documentView } from './document'
@@ -374,7 +373,6 @@ function probe($: EngineInterface, site: string, key: string, pic: Pic) {
     if (r.deny && /alt/i.test(r.deny)) {
       state.canImage = false
       state.drawCause = causeOf(state.inTmux, state.terminalName, state.isForced)
-      track('cannot_draw', { cause: state.drawCause })
       $.ui.toast("Pictures can't show here: see the notice in the chat.")
       redraw($)
     }
@@ -821,9 +819,9 @@ function PageButtons(ui: Ui, $: EngineInterface, site: string, media: Shown) {
     redraw($, site)
   }
   return [
-    pages.count > 1 && <Button key="prev" plain dimColor={at === 0} label="‹ Prev" onPress={() => { act('page_prev'); go(at - 1) }} />,
+    pages.count > 1 && <Button key="prev" plain dimColor={at === 0} label="‹ Prev" onPress={() => { go(at - 1) }} />,
     <Text key="page-count" dimColor>{`Page ${at + 1} of ${pages.count}`}</Text>,
-    pages.count > 1 && <Button key="next" plain dimColor={at >= pages.count - 1} label="Next ›" onPress={() => { act('page_next'); go(at + 1) }} />,
+    pages.count > 1 && <Button key="next" plain dimColor={at >= pages.count - 1} label="Next ›" onPress={() => { go(at + 1) }} />,
   ]
 }
 
@@ -844,7 +842,7 @@ function Scrub(ui: Ui, $: EngineInterface, site: string, media: Shown, width: nu
 
   return (
     <Box flexDirection="row" flexWrap="nowrap" width={width}>
-      <Button key="play" variant="primary" label={word} onPress={() => { act(word.includes('Pause') ? 'pause' : 'play'); if (!word.includes('Pause')) tourHeard($, 'play'); toggle($, site, media, shown) }} />
+      <Button key="play" variant="primary" label={word} onPress={() => { if (!word.includes('Pause')) tourHeard($, 'play'); toggle($, site, media, shown) }} />
       <Text dimColor> {elapsed} </Text>
       {chunks.map((c, i) => (
         <Button
@@ -852,7 +850,7 @@ function Scrub(ui: Ui, $: EngineInterface, site: string, media: Shown, width: nu
           plain
           dimColor={c.isAhead}
           label={c.label}
-          onPress={() => { act('scrub'); seek($, site, media, (Math.round((c.start / Math.max(1, segments - 1)) * (frames.count - 1)) + 0.5) / frames.fps, shown) }}
+          onPress={() => { seek($, site, media, (Math.round((c.start / Math.max(1, segments - 1)) * (frames.count - 1)) + 0.5) / frames.fps, shown) }}
         />
       ))}
       <Text dimColor> {total}</Text>
@@ -976,12 +974,12 @@ function Tabs(ui: Ui, $: EngineInterface, site: string, shown: Shown) {
 
   return (
     <Box flexDirection="row" gap={1}>
-      <Button key="side-before" variant={isCompare ? 'primary' : 'secondary'} label={tabLabel(shown.compare.label ?? 'Original')} onPress={() => { act('original'); tourHeard($, 'original'); restore(true) }} />
-      <Button key="side-after" variant={isUpdated ? 'primary' : 'secondary'} label={tabLabel(shown.label ?? 'Updated')} onPress={() => { act('updated'); restore(false) }} />
-      {canBoth && <Button key="side-both" variant={isBoth ? 'primary' : 'secondary'} label="⧉ Compare" onPress={() => { act('compare'); tourHeard($, 'compare'); restore(false); split($, site, shown, true) }} />}
+      <Button key="side-before" variant={isCompare ? 'primary' : 'secondary'} label={tabLabel(shown.compare.label ?? 'Original')} onPress={() => { tourHeard($, 'original'); restore(true) }} />
+      <Button key="side-after" variant={isUpdated ? 'primary' : 'secondary'} label={tabLabel(shown.label ?? 'Updated')} onPress={() => { restore(false) }} />
+      {canBoth && <Button key="side-both" variant={isBoth ? 'primary' : 'secondary'} label="⧉ Compare" onPress={() => { tourHeard($, 'compare'); restore(false); split($, site, shown, true) }} />}
       {hasSteps && (
         <Button key="history" variant={isHistory ? 'primary' : 'secondary'} label={`History · ${shown.history!.length + 1}`}
-          onPress={() => { if (isHistory) return restore(false); act('history'); one.isHistory = true; one.changesPage = 0; redraw($, site) }} />
+          onPress={() => { if (isHistory) return restore(false); one.isHistory = true; one.changesPage = 0; redraw($, site) }} />
       )}
     </Box>
   )
@@ -998,7 +996,7 @@ function Changes(ui: Ui, $: EngineInterface, site: string, shown: Shown, fixed: 
       key={`${word}-${c.name}`}
       plain
       label={`${c.at !== undefined ? `${clock(c.at)} ` : ''}${word} · ${c.name}`}
-      onPress={() => { if (c.at === undefined) return; act('check_jump'); seek($, site, media, c.at, shown) }}
+      onPress={() => { if (c.at === undefined) return; seek($, site, media, c.at, shown) }}
     />
   )
 
@@ -1105,7 +1103,7 @@ function Report(ui: Ui, $: EngineInterface, site: string, shown: Shown, prLink: 
       {(pages[page] ?? []).map(({ c, n, lines }, k) => {
         const isLive = n === live
         // A change pauses on its moment, to be looked at; Play goes on from there.
-        const jump = () => { if (c.at === undefined) return; act('change_jump'); tourHeard($, 'change_jump'); stop($, site); seek($, site, media, onOriginal ? toOriginal(shown, c.at) : c.at, shown) }
+        const jump = () => { if (c.at === undefined) return; tourHeard($, 'change_jump'); stop($, site); seek($, site, media, onOriginal ? toOriginal(shown, c.at) : c.at, shown) }
         return (
           <Box key={`change-${n}`} flexDirection="row" gap={1} marginTop={k ? 1 : 0}>
             <Text color={isLive ? 'suggestion' : undefined} dimColor={!isLive}>{`${n + 1}.`.padStart(3)}</Text>
@@ -1154,7 +1152,7 @@ function Report(ui: Ui, $: EngineInterface, site: string, shown: Shown, prLink: 
             <Text color={isOn ? 'suggestion' : undefined} dimColor={!isOn}>{`${i + 1}.`.padStart(3)}</Text>
             <Box flexDirection="column" width={VERSION}>
               {lines.map((line, j) => (
-                <Button key={`version-${i}-${j}`} plain label={line} hover={{ inverse: true }} onPress={() => { act('version_pick'); tourHeard($, 'version_pick'); pickVersion($, site, shown, i) }} />
+                <Button key={`version-${i}-${j}`} plain label={line} hover={{ inverse: true }} onPress={() => { tourHeard($, 'version_pick'); pickVersion($, site, shown, i) }} />
               ))}
             </Box>
             {(isOn || isLatest) && (
@@ -1229,9 +1227,9 @@ function Actions(ui: Ui, $: EngineInterface, media: Shown, source: string, isNar
   return (
     <Box flexDirection="row" gap={2}>
       {!source.startsWith(`${state.home}/Downloads/`) ? (
-        <Button key="keep" plain dimColor label="Save to Downloads" onPress={() => { act('save'); void keep() }} />
+        <Button key="keep" plain dimColor label="Save to Downloads" onPress={() => { void keep() }} />
       ) : (
-        <Button key="reveal" plain dimColor label={state.isMac ? 'Show in Finder' : 'Show in folder'} onPress={() => act('reveal') || void $.process.run(state.isMac ? ['open', '-R', source] : openArgv(source.slice(0, source.lastIndexOf('/')) || '/')).then(r => done(r, state.isMac ? 'Shown in Finder' : 'Opened the folder', 'folders', source))} />
+        <Button key="reveal" plain dimColor label={state.isMac ? 'Show in Finder' : 'Show in folder'} onPress={() => void $.process.run(state.isMac ? ['open', '-R', source] : openArgv(source.slice(0, source.lastIndexOf('/')) || '/')).then(r => done(r, state.isMac ? 'Shown in Finder' : 'Opened the folder', 'folders', source))} />
       )}
       {!isNarrow && (
         <Button
@@ -1240,7 +1238,7 @@ function Actions(ui: Ui, $: EngineInterface, media: Shown, source: string, isNar
           dimColor
           label="Copy path"
           onPress={(press: { surface: 'terminal' }) =>
-            act('copy_path') || void $.ui.copy({ text: source, surface: press.surface }).then(r => $.ui.toast(r.isCopied ? 'Path copied' : 'Could not copy the path'))
+            void $.ui.copy({ text: source, surface: press.surface }).then(r => $.ui.toast(r.isCopied ? 'Path copied' : 'Could not copy the path'))
           }
         />
       )}
@@ -1455,9 +1453,9 @@ function Warning(ui: Ui, $: EngineInterface, site: string, shown: Shown, width: 
   const n = cantDraw(state.drawCause, shown.title, shown.frames ? 'video' : 'picture', state.sessionId)
   const file = shown.origin ?? shown.source ?? shown.path
   const onPress = state.drawCause === 'desktop'
-    ? () => act(n.action) || void $.process.run(openArgv(file)).then(r => { if (r.exitCode !== 0) $.ui.toast(openFailure(r, shown.frames ? 'videos' : 'pictures', file)) })
+    ? () => void $.process.run(openArgv(file)).then(r => { if (r.exitCode !== 0) $.ui.toast(openFailure(r, shown.frames ? 'videos' : 'pictures', file)) })
     : state.drawCause === 'unrecognised'
-      ? (press: { surface: 'terminal' }) => act(n.action) || void (async () => {
+      ? (press: { surface: 'terminal' }) => void (async () => {
         const profile = await turnOnPictures($)
         const copied = await $.ui.copy({ text: n.command, surface: press.surface }).then(r => r.isCopied, () => false)
         const where = profile ? `Added to ${profile.replace(state.home, '~')}. ` : ''
@@ -1502,7 +1500,7 @@ export function NoticeBox(ui: Ui, $: EngineInterface, width: number, n: { title:
           variant="primary"
           label={n.label}
           onPress={(press: { surface: 'terminal' }) =>
-            n.onPress ? n.onPress(press) : act(n.action) || void $.ui.copy({ text: n.copy, surface: press.surface }).then(r => $.ui.toast(r.isCopied ? (n.command ? 'Copied. Paste it in your terminal.' : 'Copied. Paste it to Claude.') : 'Could not copy'))
+            n.onPress ? n.onPress(press) : void $.ui.copy({ text: n.copy, surface: press.surface }).then(r => $.ui.toast(r.isCopied ? (n.command ? 'Copied. Paste it in your terminal.' : 'Copied. Paste it to Claude.') : 'Could not copy'))
           }
         />
       </Box>
@@ -1709,9 +1707,9 @@ export async function Viewer(
           {/* Audio with no way to be heard (no ffplay, or the session's speakers
               are another room's) plays silently; that must be said, not silent. */}
           {frames && media.kind === 'audio' && !soundUsable() && <Text dimColor>♪ no sound in this session</Text>}
-          {frames && <Button key="back" plain dimColor label={`« ${SKIP_SECONDS}s`} onPress={() => act('skip_back') || seek($, site, media, one.frame / frames.fps - SKIP_SECONDS, shown, true)} />}
-          {frames && <Button key="forward" plain dimColor label={`${SKIP_SECONDS}s »`} onPress={() => act('skip_forward') || seek($, site, media, one.frame / frames.fps + SKIP_SECONDS, shown, true)} />}
-          {hasSound && <Button key="sound" plain dimColor={!state.isSoundOn} label={state.isSoundOn ? '♪ Mute' : '♪ Unmute'} onPress={() => { act(state.isSoundOn ? 'mute' : 'unmute'); toggleSound($, site, media) }} />}
+          {frames && <Button key="back" plain dimColor label={`« ${SKIP_SECONDS}s`} onPress={() => seek($, site, media, one.frame / frames.fps - SKIP_SECONDS, shown, true)} />}
+          {frames && <Button key="forward" plain dimColor label={`${SKIP_SECONDS}s »`} onPress={() => seek($, site, media, one.frame / frames.fps + SKIP_SECONDS, shown, true)} />}
+          {hasSound && <Button key="sound" plain dimColor={!state.isSoundOn} label={state.isSoundOn ? '♪ Mute' : '♪ Unmute'} onPress={() => { toggleSound($, site, media) }} />}
         </Box>
         <Box flexDirection="row" columnGap={2}>
           {opener}
