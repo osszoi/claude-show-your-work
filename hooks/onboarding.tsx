@@ -1,23 +1,15 @@
-// First run and settings: the settings pane, the welcome and the tour.
+// Settings: the /show-your-work pane and its switches.
 import { atom, update } from 'claude-code'
 import type { EngineInterface } from 'claude-code'
 
-import type { Shown } from '../types'
-
-import { PLUGIN, SETTINGS, settings, state } from './state'
+import { SETTINGS, settings, state } from './state'
 import type { Field } from './state'
-import { prepare } from './media'
-import { preparedOf } from './history'
-import { STOPS } from './tour'
-import type { Stop } from './tour'
-import { atStep, play, player, players, redraw, stop, Viewer } from './player'
+import { redraw } from './player'
 import type { Ui } from './player'
 
-// ── Settings and welcome ─────────────────────────────────────────────────
-
 export const WELCOME = 'show-your-work-welcome'
-// The settings pane's and the tour's redraws. Declared in each file that
-// reads or updates it: the engine only reads an atom declared in the same file.
+// The settings pane's redraws. Declared in each file that reads or updates
+// it: the engine only reads an atom declared in the same file.
 const welcome = atom({ plugin: 'show-your-work', key: 'welcome' } as const, 0)
 
 // Reads the saved settings once per plugin load. A reload starts with the
@@ -46,67 +38,18 @@ async function switchSetting($: EngineInterface, field: Field, value: boolean) {
   await update($, welcome, n => n + 1)
 }
 
-// The first run (see 'toured'): the plugin runs /show-your-work once, and its output row
-// in the chat draws the welcome. That run answers with WELCOME_TEXT, which is
-// how its row is told from the person's own /show-your-work.
-export const WELCOME_TEXT = 'show-your-work is installed and ready.'
-export async function openWelcome($: EngineInterface) {
-  await prepareSplash($).catch(() => undefined)
-  await finishWelcome($)
-  await openTour($)
-}
-
 // /show-your-work: the switches, in a pane.
 export async function openSettings($: EngineInterface) {
   await $.ui.open({ id: WELCOME, title: 'Settings', focus: true, closeOnEscape: true, holdToasts: true, rows: 10, columns: 70 })
   await update($, welcome, n => n + 1)
 }
 
-async function finishWelcome($: EngineInterface) {
-  if (state.isWelcomed) return
-  state.isWelcomed = true
-  // Where pictures can't show yet, the tour waits for a session where they do.
-  if (state.canImage) await $.store.set('toured', true)
-}
-
-// A five-second recording of a form being tested, played in the real
-// player with its changes and checks; the picture of one without ffmpeg.
-// The welcome's opening: show-your-work rising over a night sky, played once
-// as a picture with no controls, then held on its last frame. A still
-// without ffmpeg.
-let splash: Shown | null = null
-async function prepareSplash($: EngineInterface) {
-  const opened = await prepare($, `${$.plugin.root}/assets/splash.mp4`, 'show-your-work')
-    .catch(() => prepare($, `${$.plugin.root}/assets/splash.jpg`, 'show-your-work'))
-    .catch(() => null)
-  // The player's side list: what the plugin does, and real checks of this
-  // setup, ticking as the opening plays.
-  splash = opened && {
-    ...opened,
-    changesTitle: 'What it does',
-    changes: [
-      { title: 'Installed', at: 1.8 },
-      { title: 'Everything Claude can show you', at: 5.0 },
-      { title: 'Claude shows what it builds', at: 15.7 },
-    ],
-    checks: [
-      { name: 'This terminal draws pictures', ok: state.canImage, at: 2.2 },
-      { name: 'ffmpeg plays videos', ok: !!opened.frames, at: 5.5 },
-      { name: 'Plugin installed', ok: true, at: 16.0 },
-    ],
-  }
-  await update($, welcome, n => n + 1)
-  redraw($)
-}
-
-// /show-your-work's pane: the switches, and the way back into the tour.
 export function Settings(ui: Ui, $: EngineInterface) {
   const { Box, Text, Button } = ui
   return (
     <Box flexDirection="column" paddingX={2} paddingBottom={1}>
       <Box flexDirection="row" columnGap={2} marginBottom={1}>
         <Button key="close" label="✕ Close" onPress={() => void $.ui.close({ id: WELCOME })} />
-        <Button key="tour" label="Take a tour" onPress={() => { void $.ui.close({ id: WELCOME }).then(() => openTour($)) }} />
       </Box>
       <Box marginBottom={1}><Text bold>Show Your Work Settings</Text></Box>
       {SettingRows(ui, $)}
@@ -142,240 +85,6 @@ function SettingRows(ui: Ui, $: EngineInterface) {
           })}
         </Box>
       ))}
-    </Box>
-  )
-}
-
-// The welcome row: the opening in the real player, with its side list, then
-// what to ask, and where the tour is.
-export async function Opening($: EngineInterface, e: Parameters<EngineInterface['ui']['resolve']>[0], site: string, viewport?: { columns: number; rows: number }) {
-  const { Box, Text } = $.ui.resolve(e) as Ui
-  let view = null
-  // Where pictures can't draw, the heading alone: a warning has no place here.
-  if (splash && state.canImage) {
-    view = await Viewer($, e, atStep(splash, site), site, false, viewport)
-  }
-  return (
-    <Box flexDirection="column" rowGap={1}>
-      {view ?? <Text bold color="claude">✦ show-your-work is installed and ready</Text>}
-      <Box flexDirection="column">
-        <Text>Claude now shows you pictures and videos right here in the chat. Try asking Claude to create something and show it to you in the chat, as an image or a recording.</Text>
-        <Text dimColor>See every feature with /show-your-work tour.</Text>
-      </Box>
-    </Box>
-  )
-}
-
-// ── Tour ─────────────────────────────────────────────────────────────────
-
-// A walk through the player on the launch film's demos: the opening, a recording with
-// its report, the same recording against the broken version, a screenshot's
-// history, then the commands and switches. Opens by itself on a fresh
-// install; /show-your-work tour, or the button in the settings, opens it again.
-const TOUR = 'show-your-work-tour'
-// The tour is a message in the chat, drawn by the output row of
-// /show-your-work tour (TOUR_TEXT marks it): it lays out at the chat's full
-// width at any window size. tourSite is the live row; an older one shrinks to
-// a line.
-export const TOUR_TEXT = 'show-your-work tour.'
-
-// The one line above the control a stop points at, in the tour's row only.
-const tourMedia: { recording?: Shown | null; compare?: Shown | null; history?: Shown | null } = {}
-
-// The demo's media, read once, all from the launch film: the new-trip form
-// tested with its changes and checks, the Tern hero before and after its
-// trip card, and the hero's history from four directions to every width.
-// Loads the demo media for steps 2, 3 and 4 in parallel. Each one redraws
-// the tour when it finishes, so a step never waits for the others' media.
-async function prepareTour($: EngineInterface) {
-  const dir = `${$.plugin.root}/assets/tour`
-  const ready = () => update($, welcome, n => n + 1)
-  const recording = async () => {
-    if (tourMedia.recording !== undefined) return
-    tourMedia.recording = await (async () => {
-      const clip = await prepare($, `${dir}/trip-form.mp4`, 'New trip form')
-      const lead = clip.frames?.lead ?? 0
-      const at = (s: number) => Math.max(0, s - lead)
-      return {
-        ...clip,
-        // Where each step lands in the recording (its QA run, 1.3 s behind the log).
-        changes: [
-          { title: 'Dates pick a range, nights in the summary', at: at(5.25) },
-          { title: 'Invalid emails rejected with a message', at: at(6.85) },
-          { title: 'Invites become chips', at: at(9.1) },
-          { title: 'Create trip opens the trip', at: at(10.5) },
-        ],
-        checks: [
-          { name: 'Dates pick a range', ok: true, at: at(5.25) },
-          { name: 'Bad emails get a message', ok: true, at: at(6.85) },
-          { name: 'Invites become chips', ok: true, at: at(9.1) },
-          { name: 'Create trip opens the trip', ok: true, at: at(10.7) },
-          { name: 'Labels for screen readers', ok: true, at: at(11.2) },
-        ],
-        summary: [
-          { label: 'Trip form works end to end', ok: true, passed: 4, total: 4 },
-          { label: 'Labels for screen readers', ok: true, passed: 1, total: 1 },
-        ],
-      } as Shown
-    })().catch(() => prepare($, `${dir}/hero.jpg`, 'Tern homepage').catch(() => null))
-    await ready()
-  }
-  const compare = async () => {
-    if (tourMedia.compare !== undefined) return
-    tourMedia.compare = await (async () => ({
-      ...(await prepare($, `${dir}/hero.jpg`, 'Tern homepage')),
-      changes: [{ title: 'Trip card beside the headline' }, { title: 'Friends and trip count under the button' }],
-      compare: await prepare($, `${dir}/direction-b.jpg`, 'Original'),
-    }) as Shown)().catch(() => null)
-    await ready()
-  }
-  const history = async () => {
-    if (tourMedia.history !== undefined) return
-    tourMedia.history = await (async () => {
-      const hero = `${dir}/hero.jpg`
-      return {
-        ...(await prepare($, `${dir}/breakpoints.jpg`, 'Tern homepage')),
-        changes: [{ title: 'Desktop, tablet and phone' }],
-        note: 'Desktop, tablet and phone',
-        compare: await preparedOf($, hero),
-        history: [
-          { path: `${dir}/concepts.jpg`, note: 'Four directions' },
-          { path: `${dir}/direction-b.jpg`, note: 'Direction B, full size' },
-          { path: hero, note: 'Trip card beside the headline' },
-        ],
-        historyAt: 2,
-      } as Shown
-    })().catch(() => null)
-    await ready()
-  }
-  await Promise.all([recording(), compare(), history()])
-}
-
-// Runs /show-your-work tour, whose output row draws the tour.
-async function openTour($: EngineInterface) {
-  // A plugin's own run never reaches its own command.run hook: the tour starts
-  // here, and its row is drawn by the args it carries.
-  startTour($)
-  await $.command.run({ command: PLUGIN, args: 'tour' }).catch(() => undefined)
-}
-
-// What /show-your-work tour does before its row draws: the first stop, and
-// the demo's media read in the background.
-export function startTour($: EngineInterface) {
-  state.isTourPending = true
-  state.isTourDone = false
-  state.tourStop = 0
-  loadDemo($)
-}
-
-// Starts loading every step's media: step 1's video and the others at the same
-// time. Runs once per plugin load. A reload clears the loaded media but keeps
-// the tour's row in the chat, so Tour calls this too when it finds media missing.
-let isDemoLoading = false
-function loadDemo($: EngineInterface) {
-  if (isDemoLoading) return
-  isDemoLoading = true
-  if (!splash) void prepareSplash($).catch(() => undefined)
-  void prepareTour($).catch(() => undefined)
-}
-
-// Each stop starts its player fresh; its video waits for Play.
-export function goToStop($: EngineInterface, to: number) {
-  stop($, state.tourSite)
-  players.delete(state.tourSite)
-  state.tourStop = Math.max(0, Math.min(STOPS.length - 1, to))
-  state.isStopDone = false
-  const media = mediaOf(STOPS[state.tourStop]!)
-  void update($, welcome, n => n + 1)
-}
-
-const mediaOf = (s: Stop) => (s.media === 'splash' ? splash : s.media ? tourMedia[s.media] : null) ?? null
-
-async function finishTour($: EngineInterface, isSkip: boolean) {
-  stop($, state.tourSite)
-  state.isTourDone = true
-  await update($, welcome, n => n + 1)
-}
-
-// Draws the tour in the chat: the current step's player (or "Loading the
-// demo…", or the settings on the last step), with the step bar under it. The
-// bar takes the player's width so their edges line up.
-let isTourHeld = false
-export async function Tour($: EngineInterface, e: Parameters<EngineInterface['ui']['resolve']>[0], viewport?: { columns: number; rows: number }) {
-  const ui = $.ui.resolve(e) as Ui
-  const { Box, Text } = ui
-  const s = STOPS[state.tourStop]!
-  const media = mediaOf(s)
-  if (state.isTourDone) return <Text dimColor>✓ Tour finished. /show-your-work tour shows it again.</Text>
-  // Pictures can't show here: the notice says how to turn them on, and the
-  // tour runs again in the first session where they show.
-  if (!state.canImage) {
-    if (!isTourHeld) { isTourHeld = true; void $.store.set('toured', false).catch(() => undefined) }
-    const notice = splash ? await Viewer($, e, atStep(splash, state.tourSite), state.tourSite, false, { columns: viewport?.columns ?? 100, rows: Math.max(24, viewport?.rows ?? 40) }) : null
-    return notice ?? <Text dimColor>Loading…</Text>
-  }
-  const room = { columns: viewport?.columns ?? 100, rows: Math.max(24, viewport?.rows ?? 40) }
-  if (!media && s.media) loadDemo($)
-  // Nothing to look at yet: no bar, so Next can't be pressed before the demo shows.
-  if (!media && s.media) return <Text dimColor>Loading the demo…</Text>
-  const view = media ? await Viewer($, e, atStep(media, state.tourSite), state.tourSite, false, room) : null
-  const width = (view as { props?: { width?: number } } | null)?.props?.width ?? Math.min(room.columns - 2, 100)
-  return (
-    <Box flexDirection="column" rowGap={1}>
-      {view ?? (s.media && <Text dimColor>Loading the demo…</Text>)}
-      {state.tourStop === STOPS.length - 1 && (
-        <Box key="settings-box" flexDirection="column" borderStyle="round" borderColor="subtle" paddingX={1} width={width}>
-          <Text bold>Settings</Text>
-          <Box marginTop={1}>{SettingRows(ui, $)}</Box>
-        </Box>
-      )}
-      {TourBar(ui, $, width)}
-    </Box>
-  )
-}
-
-// The step bar: progress dots and "N of 5" on the first line, then the
-// instruction in capitals with Back, Next and Skip tour on the right. The bar
-// is lavender, and turns green with a ✓ once the person has done the step.
-function TourBar(ui: Ui, $: EngineInterface, columns: number) {
-  const { Box, Text, Button } = ui
-  const at = state.tourStop
-  const s = STOPS[at]!
-  const isLast = at === STOPS.length - 1
-  const isDone = state.isStopDone
-  // Button text is dark to read on the lavender. Claude Code before 2.1.295
-  // can't colour a button's text, so there the buttons use the default colour.
-  // Back and Next are bracketed; Skip tour is plain text, as the least wanted.
-  // Next turns black with light text once the step is done. Light text, because
-  // the terminal inverts a button under the pointer, and dark-on-black inverted
-  // would match the bar and disappear.
-  // The last step has nothing to do, so it starts green.
-  const fill = isDone || !s.goal ? 'success' : 'suggestion'
-  const onBar = (key: string, label: string, onPress: () => void, look: { isMain?: boolean; isButton?: boolean } = {}) => {
-    const text = look.isButton ? `[ ${label} ]` : label
-    if (!state.canColourButtons) return <Button key={key} plain label={text} onPress={onPress} bold={look.isMain} />
-    return (
-      <Button key={key} plain label={text} onPress={onPress}>
-        {look.isMain ? <Text bold color="text" backgroundColor="inverseText">{`  ${label}  `}</Text> : <Text color="inverseText">{text}</Text>}
-      </Button>
-    )
-  }
-  return (
-    <Box key="tour-bar" flexDirection="column" width={columns} paddingX={2} paddingY={1} backgroundColor={fill}>
-      {/* Where you are; then what to do, with the way on beside it. */}
-      <Text color="inverseText">{`${STOPS.map((_, i) => (i === at ? '●' : '○')).join(' ')}   ${at + 1} of ${STOPS.length}`}</Text>
-      <Box flexDirection="row" alignItems="flex-end" columnGap={4}>
-        <Box flexGrow={1} flexShrink={1}><Text bold color="inverseText">{(isDone ? `✓  ${s.tag}` : s.tag).toUpperCase()}</Text></Box>
-        <Box flexDirection="row" columnGap={3} flexShrink={0}>
-          {/* No Back on the last step: it's a wrap-up, and Done is the only choice. */}
-          {at > 0 && !isLast && onBar('prev', '‹ Back', () => { goToStop($, at - 1) }, { isButton: true })}
-          {/* Next fills in once the step is done; until then it's a plain button. */}
-          {isLast
-            ? onBar('done', 'Done ›', () => void finishTour($, false), { isMain: true, isButton: true })
-            : onBar('next', 'Next ›', () => { goToStop($, at + 1) }, { isMain: !s.goal || isDone, isButton: true })}
-          {!isLast && onBar('skip', 'Skip tour', () => void finishTour($, true))}
-        </Box>
-      </Box>
     </Box>
   )
 }

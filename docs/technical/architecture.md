@@ -7,7 +7,7 @@ How a picture or video gets from Claude's tool call to the terminal, and which m
 | Module | Holds |
 |---|---|
 | `register.tsx` | The entry module: the `show_image` and `show_video` tools, the `/img` and `/show-your-work` commands, and every `on(...)` hook that ties the modules together |
-| `state.ts` | What more than one module reads or changes: the session's facts, playback and tour progress, the settings |
+| `state.ts` | What more than one module reads or changes: the session's facts, playback, the settings |
 | `setup.ts` | Found once per session: temp folder, home, ffmpeg and ffprobe, ssh, the terminal |
 | `history.ts` | Every shown file kept in `.show-your-work/`, linked to the version before, and the marker a tool result carries |
 | `media.ts` | Getting files ready to draw: PNG conversion, video frames decoded as a clip plays, the side-by-side clip of two runs |
@@ -15,7 +15,7 @@ How a picture or video gets from Claude's tool call to the terminal, and which m
 | `player.tsx` | Playback (timer, frame swaps, seek, compare) and the components that draw the player |
 | `sound.ts` | A video's sound: the stream check, the cut sound file, ffplay and its clock |
 | `tmux.ts` | Inside tmux: turns on `allow-passthrough` for the pane and forwards Claude Code's picture commands, wrapped, through `pipe-pane` |
-| `onboarding.tsx`, `tour.ts` | The settings pane, the welcome and the tour |
+| `onboarding.tsx` | The settings pane |
 | `diagnostics.ts` | The local debug log: structured events, problem checks, `/show-your-work diagnose`. Never sent anywhere |
 
 `register.tsx` is the entry module and imports the rest. `hooks.json` loads `bundle.tsx`, which `node tools/bundle.mjs` joins from all of them, so Claude Code before 2.1.299 can load it (see `plugin-loader-and-hooks.md`). The loader's rules apply in every module.
@@ -42,7 +42,7 @@ What the modules pass around, and where each lives. Knowing these is most of kno
 | `state` | `state.ts` | One shared object for everything more than one module reads or changes: temp folder, tool paths, `cell` and `termSize`, `sendBytes`, `drawnBytes`, `canImage`, the `version` that forces repaints, tour progress. Module `let`s can't be shared (an imported `let` is read-only), so state goes here. |
 | `settings`, `SETTINGS` | `state.ts` | The saved choices as booleans (`standard_size`), and the list the settings pane draws from: title, the two options, one line of help. Adding a setting is one entry plus a default. |
 | `Room`, `Layout`, `Cell` | `layout.ts` | Sizing inputs and outputs: the room a player has (columns, rows, pane or inline, has a report), the space that gives (`maxCols`, `maxRows`, report beside or below), and the terminal's cell in screen pixels. |
-| `players` | `player.tsx` | One `Player` per site (a tool result, an `/img` row, the tour): the frame on screen, its timer, which tab and view, whether it's scrolled away, the box last drawn and its never-repeating `boxGeneration`. |
+| `players` | `player.tsx` | One `Player` per site (a tool result, an `/img` row): the frame on screen, its timer, which tab and view, whether it's scrolled away, the box last drawn and its never-repeating `boxGeneration`. |
 | `copies`, `making`, `chosen` | `player.tsx` | Every copy of a source by width (made at `COPY_WIDTHS` and kept), the widths being made now, and the copy each player last chose, which frame swaps follow (`syncCopy`). |
 | `swaps` | `player.tsx` | Per picture, the one `$.ui.blit` in flight and the newest frame waiting, so frames never queue or land out of order. |
 | `onDisk`, `decoders` | `media.ts` | Which frames of which folder are on disk, and the one ffmpeg decoding each folder. `recutFrame` forgets a frame whose file was cleaned away. |

@@ -10,7 +10,6 @@ import { debug, event, isWiderThanBox, problem } from './diagnostics'
 import { compareFrame, frameFile, frameReady, htmlOpenArgv, rawSizeOf, SKIP_SECONDS, identityOf, isFrameCut, isGone, isRunCut, keyOf, MAX_STILL, PAIR_GAP, pairReady, pngSize, prepareVideo, readsAnyFile, BYTES_MAX, recutFrame, rescaleVideo, toOriginal, toUpdated } from './media'
 import { prepared, preparedOf } from './history'
 import { docPage, documentView } from './document'
-import { tourHeard } from './tour'
 import { FORCE } from './tmux'
 import { haltAllSound, haltSound, measureLatency, prepareSound, probeSound, SOUND_HOLD_MAX_MS, SOUND_RESTARTS, SOUND_TAIL_S, SOUND_WAIT_MS, soundLeft, soundNow, soundTrack, soundUsable, startSound } from './sound'
 
@@ -842,7 +841,7 @@ function Scrub(ui: Ui, $: EngineInterface, site: string, media: Shown, width: nu
 
   return (
     <Box flexDirection="row" flexWrap="nowrap" width={width}>
-      <Button key="play" variant="primary" label={word} onPress={() => { if (!word.includes('Pause')) tourHeard($, 'play'); toggle($, site, media, shown) }} />
+      <Button key="play" variant="primary" label={word} onPress={() => { toggle($, site, media, shown) }} />
       <Text dimColor> {elapsed} </Text>
       {chunks.map((c, i) => (
         <Button
@@ -914,7 +913,6 @@ function viewingLabel(shown: Shown, site: string): string {
 //   TitleBar  the title (only it gives way), the side shown, the score, a PR link, the tabs
 //   stage     the picture, the scrub bar and the buttons under it
 //   Report    what changed or the versions, then QA: beside the stage when wide, else under it
-// A tour's instructions sit in the tour's own header, never inside the player.
 function TitleBar(ui: Ui, $: EngineInterface, site: string, shown: Shown, at: { width?: number; checks?: Check[]; pr?: Ui }) {
   const { Box, Text } = ui
   const checks = at.checks ?? []
@@ -974,9 +972,9 @@ function Tabs(ui: Ui, $: EngineInterface, site: string, shown: Shown) {
 
   return (
     <Box flexDirection="row" gap={1}>
-      <Button key="side-before" variant={isCompare ? 'primary' : 'secondary'} label={tabLabel(shown.compare.label ?? 'Original')} onPress={() => { tourHeard($, 'original'); restore(true) }} />
+      <Button key="side-before" variant={isCompare ? 'primary' : 'secondary'} label={tabLabel(shown.compare.label ?? 'Original')} onPress={() => { restore(true) }} />
       <Button key="side-after" variant={isUpdated ? 'primary' : 'secondary'} label={tabLabel(shown.label ?? 'Updated')} onPress={() => { restore(false) }} />
-      {canBoth && <Button key="side-both" variant={isBoth ? 'primary' : 'secondary'} label="⧉ Compare" onPress={() => { tourHeard($, 'compare'); restore(false); split($, site, shown, true) }} />}
+      {canBoth && <Button key="side-both" variant={isBoth ? 'primary' : 'secondary'} label="⧉ Compare" onPress={() => { restore(false); split($, site, shown, true) }} />}
       {hasSteps && (
         <Button key="history" variant={isHistory ? 'primary' : 'secondary'} label={`History · ${shown.history!.length + 1}`}
           onPress={() => { if (isHistory) return restore(false); one.isHistory = true; one.changesPage = 0; redraw($, site) }} />
@@ -1103,7 +1101,7 @@ function Report(ui: Ui, $: EngineInterface, site: string, shown: Shown, prLink: 
       {(pages[page] ?? []).map(({ c, n, lines }, k) => {
         const isLive = n === live
         // A change pauses on its moment, to be looked at; Play goes on from there.
-        const jump = () => { if (c.at === undefined) return; tourHeard($, 'change_jump'); stop($, site); seek($, site, media, onOriginal ? toOriginal(shown, c.at) : c.at, shown) }
+        const jump = () => { if (c.at === undefined) return; stop($, site); seek($, site, media, onOriginal ? toOriginal(shown, c.at) : c.at, shown) }
         return (
           <Box key={`change-${n}`} flexDirection="row" gap={1} marginTop={k ? 1 : 0}>
             <Text color={isLive ? 'suggestion' : undefined} dimColor={!isLive}>{`${n + 1}.`.padStart(3)}</Text>
@@ -1152,7 +1150,7 @@ function Report(ui: Ui, $: EngineInterface, site: string, shown: Shown, prLink: 
             <Text color={isOn ? 'suggestion' : undefined} dimColor={!isOn}>{`${i + 1}.`.padStart(3)}</Text>
             <Box flexDirection="column" width={VERSION}>
               {lines.map((line, j) => (
-                <Button key={`version-${i}-${j}`} plain label={line} hover={{ inverse: true }} onPress={() => { tourHeard($, 'version_pick'); pickVersion($, site, shown, i) }} />
+                <Button key={`version-${i}-${j}`} plain label={line} hover={{ inverse: true }} onPress={() => { pickVersion($, site, shown, i) }} />
               ))}
             </Box>
             {(isOn || isLatest) && (

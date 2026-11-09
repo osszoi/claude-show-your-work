@@ -5,7 +5,7 @@ import type { Register } from 'claude-code'
 
 import type { Check, KeyChange, Overlay, Shown, Summary } from '../types'
 
-import { PLUGIN, state } from './state'
+import { state } from './state'
 import { clock, paneSize } from './layout'
 import type { PaneProps } from './layout'
 import { debug, diagnosis, flushDebug } from './diagnostics'
@@ -18,7 +18,7 @@ import type { Notice } from './media'
 import { handleOf, MARK, noteOf, preparedOf, remember, shownById, shownOf, storeOf, storeVersion, textOf, timesThatMean, versionsOf } from './history'
 import { atStep, cantDraw, causeOf, draw, mayBeDropped, noteDrawn, NO_PLACEHOLDERS, NoticeBox, player, removePicturesLine, sideOf, UNRECOGNISED, stop, terminalOf, toolLine, versions, Viewer } from './player'
 import type { Ui } from './player'
-import { ensureSettings, goToStop, loadSettings, Opening, openSettings, openWelcome, Settings, startTour, Tour, TOUR_TEXT, WELCOME_TEXT } from './onboarding'
+import { ensureSettings, loadSettings, openSettings, Settings } from './onboarding'
 
 const PANE = 'show-your-work'
 // The tools, and their names from before the rename, so old windows still draw.
@@ -32,7 +32,7 @@ const MEDIA = /\.(png|jpe?g|webp|gif|tiff?|heic|heif|bmp|avif|mp4|mov|m4v|webm|m
 // id is spelled here as well as in onboarding.tsx.
 const WELCOME = 'show-your-work-welcome'
 const current = atom({ plugin: 'show-your-work', key: 'current' } as const, null)
-// The settings pane's and the tour's redraws. Declared in each file that
+// The settings pane's redraws. Declared in each file that
 // reads or updates it: the engine only reads an atom declared in the same file.
 const welcome = atom({ plugin: 'show-your-work', key: 'welcome' } as const, 0)
 let pastedNames: string[] = []
@@ -125,17 +125,14 @@ export const register: Register = on => {
         state.probed = true
         state.drawCause = isDesktop ? 'desktop' : NO_PLACEHOLDERS[state.terminalName] ? 'terminal' : causeOf(state.inTmux, state.terminalName, state.isForced)
       }
-      // Every install sees the welcome and tour once.
-      state.isWelcomed = !!(await $.store.get('toured'))
-      if (!state.isWelcomed) await openWelcome($)
     })().catch(() => undefined)
     // Frames and converted pictures a week old go; a window that scrolls back
     // into view cuts its frames again from the source.
     void $.process.run(['sh', '-c', CLEAN_SH, state.TMP]).then(() => trimFrames($))
     await $.command.register({
       name: 'show-your-work',
-      description: 'Settings for show-your-work; /show-your-work tour for the tour, /show-your-work diagnose for recent problems',
-      argumentHint: '[settings|tour|diagnose]',
+      description: 'Settings for show-your-work; /show-your-work diagnose for recent problems',
+      argumentHint: '[settings|diagnose]',
     })
     await $.command.register({
       name: 'img',
@@ -485,10 +482,6 @@ export const register: Register = on => {
 
   on('command.run', { command: 'show-your-work' }, async ($, invoked) => {
     await setUp($)
-    if (/^tour$/i.test(invoked.args.trim())) {
-      startTour($)
-      return { text: TOUR_TEXT }
-    }
     // What went wrong lately, for a bug report: problems noticed (always kept)
     // and where the full local log is. Nothing here is sent anywhere.
     if (/^diagnose$/i.test(invoked.args.trim())) return { text: diagnosis(await $.clock.now()) }
@@ -511,9 +504,6 @@ export const register: Register = on => {
   })
 
 
-  // The welcome's row: /show-your-work as the plugin ran it on install.
-  const welcomeRows = new Set<string>()
-  const tourRows = new Set<string>()
   on('ui.render', { component: 'CommandOutput' }, async ($, e, next) => {
     const row = e.props as { command?: string; args?: string; text?: string; isErrored?: boolean; onScreen?: unknown }
     // /img and /page: the player, in the chat under the command.
@@ -530,34 +520,7 @@ export const register: Register = on => {
       if (row.onScreen === null && one.timer) stop($, e.requestId)
       return Viewer($, e, atStep(shown, e.requestId), e.requestId, false, e.viewport)
     }
-    if (row.command !== PLUGIN) return next(e)
-    if (/^tour$/i.test(row.args?.trim() ?? '') || (row.text ?? '').includes(TOUR_TEXT)) {
-      // A tour row not drawn before is the newest: it becomes the live one.
-      if (!tourRows.has(e.requestId)) {
-        tourRows.add(e.requestId)
-        const was = state.tourSite
-        state.tourSite = e.requestId
-        const isFresh = state.isTourPending || !was
-        state.isTourPending = false
-        // Drawing can't change state: the stop (re)starts just after.
-        void $.clock.sleep(0).then(() => { if (was && was !== state.tourSite) stop($, was); goToStop($, isFresh ? 0 : state.tourStop) }, () => undefined)
-      }
-      if (e.requestId !== state.tourSite) {
-        const { Text } = $.ui.resolve(e) as Ui
-        return <Text dimColor>This tour moved to a newer one below.</Text>
-      }
-      // A plugin reload resets the module's state. setUp reads the Claude Code
-      // version again, which decides whether buttons can have coloured text.
-      await setUp($)
-      await read($, welcome)
-      return Tour($, e, e.viewport)
-    }
-    if (!welcomeRows.has(e.requestId)) {
-      if (!(row.text ?? '').includes(WELCOME_TEXT)) return next(e)
-      welcomeRows.add(e.requestId)
-    }
-    await setUp($)
-    return Opening($, e, e.requestId, e.viewport)
+    return next(e)
   })
 }
 

@@ -24,7 +24,7 @@ Run these two commands in Claude Code:
 
 It supports Ghostty and kitty, on macOS and Linux, with Claude Code 2.1.286 or later. Videos and audio also need ffmpeg: install it with your package manager (`brew install ffmpeg` on macOS), or ask Claude to install it. HTML pages need Chrome, Chromium or Playwright's browser, and PDFs need poppler (`brew install poppler`).
 
-When the install finishes, a short onboarding shows you around. Run `/show-your-work` at any time to change your settings.
+Run `/show-your-work` at any time to change your settings.
 
 ## Usage
 
@@ -172,13 +172,6 @@ Yes. This fork has no updater: pull the changes you want into your clone, review
 </details>
 
 <details>
-<summary><b>How do I see the onboarding again?</b></summary>
-
-You can see the onboarding again by running `/show-your-work tour`. It covers recordings, before and after, version history and the settings.
-
-</details>
-
-<details>
 <summary><b>Does it take up much space?</b></summary>
 
 No, it doesn't take up much space. It keeps recent pictures and videos so you can flip back through them, and clears out the oldest once they add up to about 1 GB.
@@ -216,8 +209,8 @@ Inside Claude Code, it uses these hooks:
 - `prompt.submit` sends one short line with your message, telling Claude this terminal can show pictures (or why it can't). It sends it once a session, again after a compaction, and when that changes.
 - `prompt.submit` closes the settings when you send a message and remembers the names of images you paste, so `/img` can find them. Your message isn't changed.
 - `tool.call` handles the plugin's own `show_image`, `show_video`, `show_html`, `show_audio` and `show_document` tools. It never touches other tools.
-- `command.run` runs `/img`, `/page`, `/audio`, `/doc` and `/show-your-work`. Right after you install, it runs `/show-your-work tour` once to show you around.
-- `ui.render` draws the plugin's player, notices, settings and tour.
+- `command.run` runs `/img`, `/page`, `/audio`, `/doc` and `/show-your-work`.
+- `ui.render` draws the plugin's player, notices and settings.
 - `session.start` and `session.end` set up the temp folder and terminal at the start, and stop any playing sound at the end. Inside tmux they also start and stop the picture pass-through for the plugin's pane (see [Terminals](#terminals)).
 
 </details>

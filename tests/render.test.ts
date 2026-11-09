@@ -151,20 +151,6 @@ test('other errors keep the engine\'s own drawing', async $ => {
   expect(drawn.includes('Videos need ffmpeg')).toBe(false)
 })
 
-// The tour's row in the chat: the player, and the step's bar under it.
-const tourRow = (requestId: string) => ({ plugin: 'show-your-work', surface: 'terminal', component: 'CommandOutput', requestId, props: { command: 'show-your-work', args: 'tour', text: 'show-your-work tour.', isErrored: false }, viewport: { columns: 120, rows: 50 } }) as any
-
-test('while a step\'s demo is loading, the tour shows no bar, so Next can\'t be pressed early', async ($, on) => {
-  on('store.get', () => ({ value: undefined }))
-  const row = await $.ui.mount(tourRow('tour-row'))
-  await new Promise(r => (globalThis as any).setTimeout(r, 30))
-  const tree = JSON.stringify(await row.drawn())
-  // The harness can't prepare the demo video, so step 1 stays loading.
-  expect(tree.includes('Loading the demo')).toBe(true)
-  expect(tree.includes('Next ›')).toBe(false)
-  expect(tree.includes('1 of 5')).toBe(false)
-})
-
 // Every node of a drawn tree whose type is `type`.
 const nodesOf = (node: any, type: string, out: any[] = []): any[] => {
   if (!node || typeof node !== 'object') return out

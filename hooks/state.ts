@@ -1,9 +1,6 @@
-// What more than one module reads or changes: the session's facts, the
-// player's and tour's progress, and the settings.
+// What more than one module reads or changes: the session's facts and the settings.
 import type { Cell } from './layout'
 import type { DrawCause } from './player'
-
-export const PLUGIN = 'show-your-work'
 
 // An imported `let` is read-only to the module that imports it, so anything
 // set in one module and read in another is a field of this object.
@@ -57,7 +54,7 @@ export const state = {
   // Sound (sound.ts): ffplay's path ('' when missing), whether the session
   // runs where its speakers aren't the person's (ssh, a background session),
   // and whether sound is on: on at every session start; Mute holds for the
-  // rest of the session. Tour videos are quiet until Play.
+  // rest of the session.
   ffplay: '',
   isFarFromSpeakers: false,
   isSoundOn: true,
@@ -75,13 +72,6 @@ export const state = {
   isForced: false,
   // Inside tmux, the terminal around it (`ghostty`, `kitty`, `rex`, or '').
   outerTerminal: '',
-  isWelcomed: false,
-  // The tour: its live row, and where it is.
-  tourSite: '',
-  isTourPending: false,
-  isTourDone: false,
-  tourStop: 0,
-  isStopDone: false,
 }
 
 // The switches, kept in the plugin's store (a /config row would reload the

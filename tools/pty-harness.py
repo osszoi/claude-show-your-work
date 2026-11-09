@@ -157,7 +157,7 @@ def run(scenario, file):
     term = Terminal(*FULL)
     term.pump(14)
     if scenario == 'image':
-        term.type(f'/img {file or os.path.join(ROOT, "assets/tour/hero.jpg")}')
+        term.type(f'/img {file or os.path.join(ROOT, "docs/thumb.jpg")}')
         term.pump(6)
         term.drag(157, 70)
         term.pump(2)
